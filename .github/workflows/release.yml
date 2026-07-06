@@ -1,79 +1,122 @@
-name: Floatwatch Release Build
+name: Floatwatch Release
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: floatwatch-release-main
+  cancel-in-progress: true
+
 jobs:
-  build:
+  release:
+    name: Build Signed APK and Release
     runs-on: ubuntu-latest
 
+    env:
+      GRADLE_VERSION: "9.5.1"
+      APP_NAME: "Floatwatch"
+
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up JDK
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: "17"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
-      - name: Decode Keystore
+      - name: Install Android SDK packages
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > release.jks
+          sdkmanager "platforms;android-35" "build-tools;36.0.0"
 
-      - name: Create keystore.properties
+      - name: Setup Gradle 9.5.1
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.5.1"
+          cache-provider: basic
+
+      - name: Restore signing files
         run: |
-          cat > keystore.properties <<EOF
-          storeFile=$GITHUB_WORKSPACE/release.jks
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "$GITHUB_WORKSPACE/floatwatch-release.jks"
+
+          cat > "$GITHUB_WORKSPACE/keystore.properties" <<EOF
+          storeFile=$GITHUB_WORKSPACE/floatwatch-release.jks
           storePassword=${{ secrets.KEYSTORE_PASSWORD }}
           keyAlias=${{ secrets.KEY_ALIAS }}
           keyPassword=${{ secrets.KEY_PASSWORD }}
           EOF
 
-      # =========================
-      # 1. 自动生成版本号
-      # =========================
-      - name: Generate Version
+      - name: Generate version
         run: |
           VERSION_CODE=${{ github.run_number }}
           VERSION_NAME="1.0.${VERSION_CODE}"
 
-          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
-          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
 
-          sed -i "s/versionCode = .*/versionCode = $VERSION_CODE/" app/build.gradle.kts
-          sed -i "s/versionName = .*/versionName = \"$VERSION_NAME\"/" app/build.gradle.kts
+          if [ -f app/build.gradle.kts ]; then
+            sed -i "s/versionCode = .*/versionCode = $VERSION_CODE/" app/build.gradle.kts
+            sed -i "s/versionName = .*/versionName = \"$VERSION_NAME\"/" app/build.gradle.kts
+          fi
 
-      # =========================
-      # 2. Build APK
-      # =========================
-      - name: Build Release APK
-        run: ./gradlew assembleRelease
+          if [ -f app/build.gradle ]; then
+            sed -i "s/versionCode .*/versionCode $VERSION_CODE/" app/build.gradle
+            sed -i "s/versionName .*/versionName \"$VERSION_NAME\"/" app/build.gradle
+          fi
 
-      # =========================
-      # 3. Rename APK
-      # =========================
-      - name: Prepare APK
+      - name: Build release APK
         run: |
-          mkdir output
-          cp app/build/outputs/apk/release/*.apk output/Floatwatch-${{ env.VERSION_NAME }}.apk
+          gradle :app:assembleRelease --no-daemon --stacktrace
 
-      # =========================
-      # 4. Create GitHub Release
-      # =========================
-      - name: Create Release
+      - name: Find and rename APK
+        run: |
+          mkdir -p output
+
+          APK_PATH="$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+
+          if [ -z "$APK_PATH" ]; then
+            echo "No APK found"
+            exit 1
+          fi
+
+          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
+
+          cp "$APK_PATH" "output/Floatwatch-${VERSION_NAME}.apk"
+
+      - name: Verify APK signature
+        run: |
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+
+          if [ -z "$APKSIGNER" ]; then
+            echo "apksigner not found"
+            exit 1
+          fi
+
+          "$APKSIGNER" verify --verbose "output/Floatwatch-${VERSION_NAME}.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Floatwatch-${{ env.VERSION_NAME }}-apk
+          path: output/*.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSION_NAME }}
           name: Floatwatch v${{ env.VERSION_NAME }}
           files: output/*.apk
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
