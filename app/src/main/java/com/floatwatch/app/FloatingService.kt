@@ -170,18 +170,18 @@ private fun buildFullView(): LinearLayout {
     val bgColor = if (dark) alphaColor(Color.rgb(15, 23, 42), opacity) else alphaColor(Color.WHITE, opacity)
     val primaryText = if (dark) Color.WHITE else Color.rgb(15, 23, 42)
     val secondaryText = if (dark) Color.rgb(203, 213, 225) else Color.rgb(71, 85, 105)
-    val scale = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) 0.92f else 0.88f
+    val scale = 0.88f
 
     return LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        minimumWidth = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) dp(174) else dp(154)
+        minimumWidth = dp(158)
         setPadding((dp(12) * scale).roundToInt(), (dp(10) * scale).roundToInt(), (dp(12) * scale).roundToInt(), (dp(10) * scale).roundToInt())
         background = roundedBg(bgColor, 22f, 1, if (dark) Color.argb(52, 255, 255, 255) else Color.rgb(226, 232, 240), this)
         elevation = dp(10).toFloat()
 
         val top = LinearLayout(this@FloatingService).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         sourceView = TextView(this@FloatingService).apply {
-            text = cfg?.platformName ?: "系统时间"
+            text = displayPlatformName(cfg?.platformName)
             textSize = 10.8f
             gravity = Gravity.CENTER
             setTextColor(secondaryText)
@@ -206,7 +206,7 @@ private fun buildFullView(): LinearLayout {
 
         timeView = TextView(this@FloatingService).apply {
             text = "--:--:--.-"
-            textSize = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) 27f else 23.5f
+            textSize = 23.5f
             setTextColor(primaryText)
             includeFontPadding = false
             bold()
@@ -442,7 +442,7 @@ private fun buildCompactView(): LinearLayout {
             return
         }
         val result = LatencyTester.stableTest(url)
-        latestLatencyMs = result.latencyMs
+        latestLatencyMs = LatencyStabilizer.update(cfg?.platformName ?: "default", result.latencyMs)
         serverOffsetMs = result.serverOffsetMs ?: 0L
         updateLatencyUi()
     }
@@ -500,6 +500,10 @@ private fun buildCompactView(): LinearLayout {
             }
         }
         return System.currentTimeMillis() + durationMs
+    }
+
+    private fun displayPlatformName(name: String?): String {
+        return if (name == "系统时间") "系统" else (name ?: "系统")
     }
 
     private fun sizeScale(): Float = when (cfg?.size) {

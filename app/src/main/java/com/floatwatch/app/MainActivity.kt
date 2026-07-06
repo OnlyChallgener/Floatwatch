@@ -196,13 +196,14 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(9), dp(12), dp(9), dp(14))
+            setPadding(dp(9), dp(11), dp(9), dp(18))
             background = roundedBg(Color.WHITE, 18f, view = this)
             elevation = 1.0f * resources.displayMetrics.density
             setOnClickListener {
                 selectedPlatform = platform
                 latestLatencyMs = if (platform.url == null) 0L else -1L
                 serverOffsetMs = 0L
+                LatencyStabilizer.reset(platform.name)
                 ConfigStore.savePlatform(this@MainActivity, platform)
                 updateSelectedCards()
                 updateStatus()
@@ -211,7 +212,7 @@ class MainActivity : Activity() {
         }
         val icon = TextView(this).apply {
             text = platform.shortName
-            textSize = 13.5f
+            textSize = 13.4f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             bold()
@@ -233,7 +234,7 @@ class MainActivity : Activity() {
         }
         val latency = TextView(this).apply {
             text = if (platform.url == null) "0 ms" else "-- ms"
-            textSize = 12f
+            textSize = 11.8f
             gravity = Gravity.CENTER
             includeFontPadding = true
             setSingleLine(true)
@@ -244,12 +245,12 @@ class MainActivity : Activity() {
         card.addView(icon, LinearLayout.LayoutParams(dp(38), dp(38)))
         card.addView(name, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         card.addView(time, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(5) })
-        card.addView(latency, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(22)).apply { topMargin = dp(3) })
+        card.addView(latency, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)).apply { topMargin = dp(3) })
 
         val cardWidth = ((resources.displayMetrics.widthPixels - dp(56)) / 3f).roundToInt()
         card.layoutParams = GridLayout.LayoutParams().apply {
             width = cardWidth
-            height = dp(142)
+            height = dp(154)
             setMargins(dp(3), dp(5), dp(3), dp(5))
         }
         return card
@@ -332,6 +333,8 @@ private fun showFloatingConfigSheet() {
 
         val modeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            clipToPadding = false
+            setPadding(0, 0, 0, dp(4))
         }
         val clockBtn = choiceButton("时钟模式", mode == ConfigStore.MODE_CLOCK) {
             ConfigStore.saveMode(this, ConfigStore.MODE_CLOCK)
@@ -343,9 +346,9 @@ private fun showFloatingConfigSheet() {
             mode = ConfigStore.MODE_COUNTDOWN
             dialog.dismiss(); showFloatingConfigSheet()
         }
-        modeRow.addView(clockBtn, LinearLayout.LayoutParams(0, dp(44), 1f))
-        modeRow.addView(countdownBtn, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(10) })
-        root.addView(modeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(4) })
+        modeRow.addView(clockBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { bottomMargin = dp(4) })
+        modeRow.addView(countdownBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { leftMargin = dp(10); bottomMargin = dp(4) })
+        root.addView(modeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)).apply { topMargin = dp(4) })
 
         var targetInput: EditText? = null
         if (mode == ConfigStore.MODE_COUNTDOWN) {
@@ -364,7 +367,7 @@ private fun showFloatingConfigSheet() {
             root.addView(targetInput!!, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)))
 
             root.addView(sectionHeader("预设时间", ""), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(26)).apply { topMargin = dp(8) })
-            val quickRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val quickRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipToPadding = false; setPadding(0, 0, 0, dp(6)) }
             listOf("30s" to 30L, "1min" to 60L, "3min" to 180L, "5min" to 300L).forEachIndexed { index, pair ->
                 val (label, seconds) = pair
                 quickRow.addView(choiceButton(label, countdownMs == seconds * 1000L && countdownTargetText.isBlank()) {
@@ -373,9 +376,9 @@ private fun showFloatingConfigSheet() {
                     targetInput?.setText("")
                     ConfigStore.saveCountdown(this, countdownMs, "")
                     dialog.dismiss(); showFloatingConfigSheet()
-                }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { if (index > 0) leftMargin = dp(10) })
+                }, LinearLayout.LayoutParams(0, dp(42), 1f).apply { if (index > 0) leftMargin = dp(10); bottomMargin = dp(6) })
             }
-            root.addView(quickRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
+            root.addView(quickRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
         }
 
         addCompactOffsetSection(root)
@@ -604,14 +607,14 @@ private fun addCompactOffsetSection(root: LinearLayout) {
 
     private fun choiceButton(text: String, selected: Boolean, action: (View) -> Unit): TextView = TextView(this).apply {
         this.text = text
-        textSize = 13.5f
+        textSize = 13.4f
         gravity = Gravity.CENTER
         includeFontPadding = true
         setTextColor(if (selected) Color.WHITE else Color.rgb(17, 24, 39))
         background = if (selected) {
-            gradientBg(Color.rgb(74, 222, 128), Color.rgb(34, 197, 94), 20f, this)
+            gradientBg(Color.rgb(74, 222, 128), Color.rgb(34, 197, 94), 999f, this)
         } else {
-            roundedBg(Color.rgb(241, 245, 249), 20f, 1, Color.rgb(226, 232, 240), this)
+            roundedBg(Color.rgb(241, 245, 249), 999f, 1, Color.rgb(226, 232, 240), this)
         }
         elevation = if (selected) 2.4f * resources.displayMetrics.density else 1.8f * resources.displayMetrics.density
         setPadding(0, dp(2), 0, dp(2))
@@ -653,7 +656,7 @@ private fun addCompactOffsetSection(root: LinearLayout) {
         }
         scope.launch {
             val result = LatencyTester.stableTest(url)
-            latestLatencyMs = result.latencyMs
+            latestLatencyMs = LatencyStabilizer.update(selectedPlatform.name, result.latencyMs)
             serverOffsetMs = result.serverOffsetMs ?: 0L
             updateStatus()
         }
