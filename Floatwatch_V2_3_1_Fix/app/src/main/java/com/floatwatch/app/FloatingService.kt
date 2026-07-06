@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -168,9 +169,9 @@ class FloatingService : Service() {
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding((dp(14) * scale).roundToInt(), (dp(12) * scale).roundToInt(), (dp(14) * scale).roundToInt(), (dp(10) * scale).roundToInt())
-            background = roundedBg(bgColor, 28f, 1, if (dark) Color.argb(60, 255, 255, 255) else Color.rgb(226, 232, 240), this)
-            elevation = dp(12).toFloat()
+            setPadding((dp(11) * scale).roundToInt(), (dp(9) * scale).roundToInt(), (dp(11) * scale).roundToInt(), (dp(8) * scale).roundToInt())
+            background = roundedBg(bgColor, 24f, 1, if (dark) Color.argb(52, 255, 255, 255) else Color.rgb(226, 232, 240), this)
+            elevation = dp(10).toFloat()
             alpha = 1f
 
             val top = LinearLayout(this@FloatingService).apply {
@@ -180,32 +181,35 @@ class FloatingService : Service() {
             statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
             sourceView = TextView(this@FloatingService).apply {
                 text = cfg?.platformName ?: "系统时间"
-                textSize = 13f * scale
+                textSize = 11.5f * scale
+                gravity = Gravity.CENTER
                 setTextColor(secondaryText)
                 bold()
+                background = roundedBg(if (dark) Color.argb(35, 255, 255, 255) else Color.rgb(248, 250, 252), 999f, 1, Color.argb(28, 148, 163, 184), this)
+                setPadding((dp(8) * scale).roundToInt(), 0, (dp(8) * scale).roundToInt(), 0)
             }
             latencyView = TextView(this@FloatingService).apply {
                 text = latencyText(latestLatencyMs)
-                textSize = 12f * scale
+                textSize = 11f * scale
                 gravity = Gravity.CENTER
                 setTextColor(latencyColor(latestLatencyMs))
                 bold()
-                background = roundedBg(if (dark) Color.argb(42, 255, 255, 255) else Color.rgb(248, 250, 252), 999f, 1, Color.argb(35, 148, 163, 184), this)
+                background = roundedBg(if (dark) Color.argb(42, 255, 255, 255) else Color.rgb(248, 250, 252), 999f, 1, Color.argb(30, 148, 163, 184), this)
             }
-            top.addView(statusDot, LinearLayout.LayoutParams((dp(8) * scale).roundToInt(), (dp(8) * scale).roundToInt()))
-            top.addView(sourceView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = (dp(8) * scale).roundToInt() })
-            top.addView(latencyView, LinearLayout.LayoutParams((dp(70) * scale).roundToInt(), (dp(28) * scale).roundToInt()))
+            top.addView(statusDot, LinearLayout.LayoutParams((dp(7) * scale).roundToInt(), (dp(7) * scale).roundToInt()))
+            top.addView(sourceView, LinearLayout.LayoutParams(0, (dp(22) * scale).roundToInt(), 1f).apply { leftMargin = (dp(6) * scale).roundToInt(); rightMargin = (dp(6) * scale).roundToInt() })
+            top.addView(latencyView, LinearLayout.LayoutParams((dp(58) * scale).roundToInt(), (dp(22) * scale).roundToInt()))
 
             timeView = TextView(this@FloatingService).apply {
                 text = "--:--:--.-"
-                textSize = 30f * scale
+                textSize = 24f * scale
                 setTextColor(primaryText)
                 includeFontPadding = false
                 bold()
             }
             hintView = TextView(this@FloatingService)
-            addView(top, LinearLayout.LayoutParams((dp(190) * scale).roundToInt(), ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (dp(8) * scale).roundToInt() })
+            addView(top, LinearLayout.LayoutParams((dp(158) * scale).roundToInt(), ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (dp(5) * scale).roundToInt() })
         }
     }
 
@@ -225,7 +229,7 @@ class FloatingService : Service() {
             statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
             timeView = TextView(this@FloatingService).apply {
                 text = "--:--:--.-"
-                textSize = 18f * scale
+                textSize = 17f * scale
                 setTextColor(primaryText)
                 includeFontPadding = false
                 bold()
@@ -433,7 +437,7 @@ class FloatingService : Service() {
             updateLatencyUi()
             return
         }
-        val result = LatencyTester.test(url)
+        val result = LatencyTester.stableTest(url)
         latestLatencyMs = result.latencyMs
         serverOffsetMs = result.serverOffsetMs ?: 0L
         updateLatencyUi()
@@ -503,18 +507,19 @@ class FloatingService : Service() {
     }
 
     private fun sizeScale(): Float = when (cfg?.size) {
-        ConfigStore.SIZE_SMALL -> 0.86f
-        ConfigStore.SIZE_LARGE -> 1.14f
-        else -> 1.0f
+        ConfigStore.SIZE_SMALL -> 0.88f
+        ConfigStore.SIZE_LARGE -> 0.88f
+        else -> 0.88f
     }
 
     private fun buildNotification(): Notification {
+        val openIntent = Intent.makeMainActivity(ComponentName(this, MainActivity::class.java)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
         val openAppIntent = PendingIntent.getActivity(
             this,
-            0,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            },
+            100,
+            openIntent,
             pendingFlags()
         )
         val showIntent = PendingIntent.getService(this, 1, Intent(this, FloatingService::class.java).apply { action = ACTION_SHOW }, pendingFlags())
@@ -531,8 +536,10 @@ class FloatingService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_recent_history)
             .setContentTitle("Floatwatch 正在运行")
             .setContentText("点击回到 APP，通知栏可显示、隐藏、暂停或停止悬浮窗")
+            .setCategory(Notification.CATEGORY_SERVICE)
             .setContentIntent(openAppIntent)
             .setOngoing(true)
+            .setPriority(Notification.PRIORITY_DEFAULT)
             .addAction(android.R.drawable.ic_menu_view, "显示", showIntent)
             .addAction(android.R.drawable.ic_media_pause, "暂停", pauseIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止", stopIntent)

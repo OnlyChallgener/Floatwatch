@@ -211,7 +211,7 @@ class MainActivity : Activity() {
         }
         val icon = TextView(this).apply {
             text = platform.shortName
-            textSize = 15f
+            textSize = 13.5f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             bold()
@@ -280,18 +280,6 @@ private fun showAppSettingsSheet() {
         }, LinearLayout.LayoutParams(0, dp(36), 1f).apply { if (index > 0) leftMargin = dp(8) })
     }
     root.addView(refreshRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)))
-
-    root.addView(sectionHeader("悬浮样式", ""), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(28)).apply { topMargin = dp(8) })
-    val styleRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-    styleRow.addView(choiceButton("精简模式", floatingSize == ConfigStore.SIZE_SMALL) {
-        saveSize(ConfigStore.SIZE_SMALL)
-        dialog.dismiss(); showAppSettingsSheet()
-    }, LinearLayout.LayoutParams(0, dp(36), 1f))
-    styleRow.addView(choiceButton("小号完整模式", floatingSize == ConfigStore.SIZE_MEDIUM) {
-        saveSize(ConfigStore.SIZE_MEDIUM)
-        dialog.dismiss(); showAppSettingsSheet()
-    }, LinearLayout.LayoutParams(0, dp(36), 1f).apply { leftMargin = dp(8) })
-    root.addView(styleRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)))
 
     val themeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
     themeRow.addView(choiceButton("深色", floatingTheme == ConfigStore.THEME_DARK) {
@@ -428,26 +416,26 @@ private fun addCompactOffsetSection(root: LinearLayout) {
         gravity = Gravity.CENTER_VERTICAL
     }
     val left = TextView(this).apply {
-        text = "时间偏移(" + if (isAhead) "提前" else "延后" + ") ▼"
-        textSize = 13f
+        text = "时间偏移(${if (isAhead) "提前" else "延后"}) ▼"
+        textSize = 13.2f
         setTextColor(Color.rgb(30, 41, 59))
         bold()
     }
     val right = TextView(this).apply {
-        text = "↻ 网络延迟${latestLatencyMs.coerceAtLeast(0L)}毫秒"
-        textSize = 12.5f
+        text = "↻ 延迟${latestLatencyMs.coerceAtLeast(0L)}毫秒"
+        textSize = 13.2f
         gravity = Gravity.END
         setTextColor(Color.rgb(30, 41, 59))
         setOnClickListener {
             refreshSelectedOnce()
-            postDelayed({ text = "↻ 网络延迟${latestLatencyMs.coerceAtLeast(0L)}毫秒" }, 250L)
+            postDelayed({ text = "↻ 延迟${latestLatencyMs.coerceAtLeast(0L)}毫秒" }, 250L)
         }
     }
     left.setOnClickListener {
         isAhead = !isAhead
         offsetMs = if (isAhead) offsetAbs else -offsetAbs
         ConfigStore.saveOffset(this@MainActivity, offsetMs)
-        left.text = "时间偏移(" + if (isAhead) "提前" else "延后" + ") ▼"
+        left.text = "时间偏移(${if (isAhead) "提前" else "延后"}) ▼"
         updateStatus()
     }
     topRow.addView(left, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -461,7 +449,7 @@ private fun addCompactOffsetSection(root: LinearLayout) {
         setTextColor(Color.rgb(15, 23, 42))
         bold()
     }
-    root.addView(offsetValue, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(26)).apply { topMargin = dp(6) })
+    root.addView(offsetValue, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(22)).apply { topMargin = dp(4) })
 
     val offsetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
     val offsetSeek = SeekBar(this).apply {
@@ -487,10 +475,10 @@ private fun addCompactOffsetSection(root: LinearLayout) {
         offsetAbs = (offsetAbs + 10L).coerceIn(0L, 1000L)
         offsetSeek.progress = offsetAbs.toInt()
     }
-    offsetRow.addView(minus, LinearLayout.LayoutParams(dp(34), dp(34)))
-    offsetRow.addView(offsetSeek, LinearLayout.LayoutParams(0, dp(36), 1f).apply { leftMargin = dp(8); rightMargin = dp(8) })
-    offsetRow.addView(plus, LinearLayout.LayoutParams(dp(34), dp(34)))
-    root.addView(offsetRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+    offsetRow.addView(minus, LinearLayout.LayoutParams(dp(32), dp(32)))
+    offsetRow.addView(offsetSeek, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(8); rightMargin = dp(8) })
+    offsetRow.addView(plus, LinearLayout.LayoutParams(dp(32), dp(32)))
+    root.addView(offsetRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)))
 }
 
 // addLatencySection removed in V2.3
