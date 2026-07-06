@@ -165,11 +165,12 @@ private fun buildFullView(): LinearLayout {
     val bgColor = if (dark) alphaColor(Color.rgb(15, 23, 42), opacity) else alphaColor(Color.WHITE, opacity)
     val primaryText = if (dark) Color.WHITE else Color.rgb(15, 23, 42)
     val secondaryText = if (dark) Color.rgb(203, 213, 225) else Color.rgb(71, 85, 105)
-    val scale = 0.78f
+    val scale = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) 0.86f else 0.82f
 
     return LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding((dp(10) * scale).roundToInt(), (dp(8) * scale).roundToInt(), (dp(10) * scale).roundToInt(), (dp(8) * scale).roundToInt())
+        minimumWidth = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) dp(156) else dp(142)
+        setPadding((dp(11) * scale).roundToInt(), (dp(9) * scale).roundToInt(), (dp(11) * scale).roundToInt(), (dp(9) * scale).roundToInt())
         background = roundedBg(bgColor, 22f, 1, if (dark) Color.argb(52, 255, 255, 255) else Color.rgb(226, 232, 240), this)
         elevation = dp(10).toFloat()
 
@@ -194,13 +195,13 @@ private fun buildFullView(): LinearLayout {
         statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
         val leftWrap = LinearLayout(this@FloatingService).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         leftWrap.addView(statusDot, LinearLayout.LayoutParams((dp(6) * scale).roundToInt(), (dp(6) * scale).roundToInt()).apply { rightMargin = (dp(5) * scale).roundToInt() })
-        leftWrap.addView(sourceView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (dp(22) * scale).roundToInt()))
+        leftWrap.addView(sourceView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (dp(24) * scale).roundToInt()))
         top.addView(leftWrap, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        top.addView(latencyView, LinearLayout.LayoutParams((dp(56) * scale).roundToInt(), (dp(22) * scale).roundToInt()).apply { leftMargin = (dp(7) * scale).roundToInt() })
+        top.addView(latencyView, LinearLayout.LayoutParams((dp(62) * scale).roundToInt(), (dp(24) * scale).roundToInt()).apply { leftMargin = (dp(8) * scale).roundToInt() })
 
         timeView = TextView(this@FloatingService).apply {
             text = "--:--:--.-"
-            textSize = 20.5f
+            textSize = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) 26f else 22.8f
             setTextColor(primaryText)
             includeFontPadding = false
             bold()
@@ -216,18 +217,19 @@ private fun buildCompactView(): LinearLayout {
         val opacity = cfg?.opacityPercent ?: 88
         val bgColor = if (dark) alphaColor(Color.rgb(15, 23, 42), opacity) else alphaColor(Color.WHITE, opacity)
         val primaryText = if (dark) Color.WHITE else Color.rgb(15, 23, 42)
-        val scale = 0.78f
+        val scale = 0.88f
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding((dp(12) * scale).roundToInt(), (dp(8) * scale).roundToInt(), (dp(12) * scale).roundToInt(), (dp(8) * scale).roundToInt())
+            minimumHeight = dp(36)
+            setPadding((dp(13) * scale).roundToInt(), (dp(9) * scale).roundToInt(), (dp(13) * scale).roundToInt(), (dp(9) * scale).roundToInt())
             background = roundedBg(bgColor, 999f, 1, if (dark) Color.argb(55, 255, 255, 255) else Color.rgb(226, 232, 240), this)
             elevation = dp(10).toFloat()
             statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
             timeView = TextView(this@FloatingService).apply {
                 text = "--:--:--.-"
-                textSize = 19f * scale
+                textSize = 18.5f * scale
                 setTextColor(primaryText)
                 includeFontPadding = false
                 bold()
@@ -240,9 +242,8 @@ private fun buildCompactView(): LinearLayout {
             }
             sourceView = TextView(this@FloatingService)
             hintView = TextView(this@FloatingService)
-            addView(statusDot, LinearLayout.LayoutParams((dp(7) * scale).roundToInt(), (dp(7) * scale).roundToInt()))
-            addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = (dp(8) * scale).roundToInt() })
-            // 精简模式只显示核心时间，仍保留 0.1 秒；不再附带额外提示文字。
+            addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            // 精简模式只显示核心数字时间，不显示平台、圆点或延迟。
         }
     }
 

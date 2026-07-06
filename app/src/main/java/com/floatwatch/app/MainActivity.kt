@@ -405,7 +405,7 @@ private fun showFloatingConfigSheet() {
                 if (mode == ConfigStore.MODE_COUNTDOWN) {
                     countdownTargetText = ""
                     countdownMs = 0L
-                    postDelayed({ ConfigStore.saveCountdown(this@MainActivity, 0L, "") }, 600L)
+                    mainButton.postDelayed({ ConfigStore.saveCountdown(this@MainActivity, 0L, "") }, 600L)
                 }
                 dialog.dismiss()
             }
@@ -460,7 +460,7 @@ private fun addCompactOffsetSection(root: LinearLayout) {
         setTextColor(Color.rgb(15, 23, 42))
         bold()
     }
-    root.addView(offsetValue, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(22)).apply { topMargin = dp(4) })
+    root.addView(offsetValue, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(20)).apply { topMargin = dp(4) })
 
     val offsetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
     val offsetSeek = SeekBar(this).apply {
