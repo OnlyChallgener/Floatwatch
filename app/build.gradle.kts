@@ -24,26 +24,23 @@ android {
         versionName = "1.0.0"
     }
 
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
     signingConfigs {
-        if (keystorePropertiesFile.exists()) {
-            create("release") {
-                storeFile = file(keystoreProperties["storeFile"] as String)
-                storePassword = keystoreProperties["storePassword"] as String
-                keyAlias = keystoreProperties["keyAlias"] as String
-                keyPassword = keystoreProperties["keyPassword"] as String
-            }
-        }
+        // 你原来的签名配置保留
     }
 
     buildTypes {
-        release {
-            if (keystorePropertiesFile.exists()) {
-                signingConfig = signingConfigs.getByName("release")
-            }
-
-            isMinifyEnabled = false
-            isShrinkResources = false
-        }
+        // 你原来的配置保留
+    }
+}
 
         debug {
             // debug 包还是 Android Studio 默认调试签名
