@@ -50,8 +50,8 @@ class MainActivity : Activity() {
     private var latestLatencyMs: Long = 0L
     private var serverOffsetMs: Long = 0L
     private var autoRefresh: Boolean = true
-    private var refreshIntervalMs: Long = 5000L
-    private var countdownMs: Long = 30000L
+    private var refreshIntervalMs: Long = 3000L
+    private var countdownMs: Long = 0L
     private var countdownTargetText: String = ""
     private var opacityPercent: Int = 88
     private var floatingSize: String = ConfigStore.SIZE_MEDIUM
@@ -244,11 +244,11 @@ class MainActivity : Activity() {
         card.addView(time, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(5) })
         card.addView(latency, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(3) })
 
-        val cardWidth = ((resources.displayMetrics.widthPixels - dp(44)) / 3f).roundToInt()
+        val cardWidth = ((resources.displayMetrics.widthPixels - dp(56)) / 3f).roundToInt()
         card.layoutParams = GridLayout.LayoutParams().apply {
             width = cardWidth
-            height = dp(128)
-            setMargins(dp(4), dp(5), dp(4), dp(5))
+            height = dp(124)
+            setMargins(dp(3), dp(5), dp(3), dp(5))
         }
         return card
     }
@@ -279,7 +279,7 @@ private fun showAppSettingsSheet() {
             dialog.dismiss(); showAppSettingsSheet()
         }, LinearLayout.LayoutParams(0, dp(36), 1f).apply { if (index > 0) leftMargin = dp(8) })
     }
-    root.addView(refreshRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)))
+    root.addView(refreshRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)))
 
     val themeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
     themeRow.addView(choiceButton("深色", floatingTheme == ConfigStore.THEME_DARK) {
@@ -290,7 +290,7 @@ private fun showAppSettingsSheet() {
         saveTheme(ConfigStore.THEME_LIGHT)
         dialog.dismiss(); showAppSettingsSheet()
     }, LinearLayout.LayoutParams(0, dp(36), 1f).apply { leftMargin = dp(8) })
-    root.addView(themeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)).apply { topMargin = dp(8) })
+    root.addView(themeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { topMargin = dp(10) })
 
     root.addView(sectionHeader("透明度", "${opacityPercent}%"), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(28)).apply { topMargin = dp(8) })
     val opacitySeek = SeekBar(this).apply {
@@ -330,8 +330,6 @@ private fun showFloatingConfigSheet() {
 
         val modeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(3), dp(3), dp(3), dp(3))
-            background = roundedBg(Color.rgb(241, 245, 249), 999f, view = this)
         }
         val clockBtn = Button(this).apply { text = "时钟模式"; oneUiButton(mode == ConfigStore.MODE_CLOCK) }
         val countdownBtn = Button(this).apply { text = "倒计时模式"; oneUiButton(mode == ConfigStore.MODE_COUNTDOWN) }
@@ -345,16 +343,16 @@ private fun showFloatingConfigSheet() {
             mode = ConfigStore.MODE_COUNTDOWN
             dialog.dismiss(); showFloatingConfigSheet()
         }
-        modeRow.addView(clockBtn, LinearLayout.LayoutParams(0, dp(42), 1f))
-        modeRow.addView(countdownBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { leftMargin = dp(4) })
-        root.addView(modeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(2) })
+        modeRow.addView(clockBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
+        modeRow.addView(countdownBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { leftMargin = dp(10) })
+        root.addView(modeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(4) })
 
         var targetInput: EditText? = null
         if (mode == ConfigStore.MODE_COUNTDOWN) {
             root.addView(sectionHeader("结束时间", "优先于预设"), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(26)).apply { topMargin = dp(8) })
             targetInput = EditText(this).apply {
                 setText(countdownTargetText)
-                hint = "例如 12:00:00.0"
+                hint = "例如 16:32:33"
                 textSize = 14f
                 setSingleLine(true)
                 inputType = InputType.TYPE_CLASS_TEXT
@@ -375,9 +373,9 @@ private fun showFloatingConfigSheet() {
                     targetInput?.setText("")
                     ConfigStore.saveCountdown(this, countdownMs, "")
                     dialog.dismiss(); showFloatingConfigSheet()
-                }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { if (index > 0) leftMargin = dp(8) })
+                }, LinearLayout.LayoutParams(0, dp(40), 1f).apply { if (index > 0) leftMargin = dp(10) })
             }
-            root.addView(quickRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+            root.addView(quickRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)))
         }
 
         addCompactOffsetSection(root)
@@ -395,8 +393,20 @@ private fun showFloatingConfigSheet() {
                     android.widget.Toast.makeText(this@MainActivity, "请选择结束时间或预设时间", android.widget.Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
+                if (mode == ConfigStore.MODE_COUNTDOWN && countdownTargetText.isNotBlank()) {
+                    val targetMillis = parseFutureTargetMillis(countdownTargetText)
+                    if (targetMillis == null) {
+                        android.widget.Toast.makeText(this@MainActivity, "结束时间只能填写未来时间", android.widget.Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                }
                 saveAllSettings()
                 startFloating()
+                if (mode == ConfigStore.MODE_COUNTDOWN) {
+                    countdownTargetText = ""
+                    countdownMs = 0L
+                    postDelayed({ ConfigStore.saveCountdown(this@MainActivity, 0L, "") }, 600L)
+                }
                 dialog.dismiss()
             }
         }
@@ -417,15 +427,16 @@ private fun addCompactOffsetSection(root: LinearLayout) {
     }
     val left = TextView(this).apply {
         text = "时间偏移(${if (isAhead) "提前" else "延后"}) ▼"
-        textSize = 13.2f
+        textSize = 13.4f
         setTextColor(Color.rgb(30, 41, 59))
         bold()
     }
     val right = TextView(this).apply {
         text = "↻ 延迟${latestLatencyMs.coerceAtLeast(0L)}毫秒"
-        textSize = 13.2f
+        textSize = 13.8f
         gravity = Gravity.END
         setTextColor(Color.rgb(30, 41, 59))
+        bold()
         setOnClickListener {
             refreshSelectedOnce()
             postDelayed({ text = "↻ 延迟${latestLatencyMs.coerceAtLeast(0L)}毫秒" }, 250L)
@@ -444,7 +455,7 @@ private fun addCompactOffsetSection(root: LinearLayout) {
 
     val offsetValue = TextView(this).apply {
         text = "${offsetAbs}毫秒"
-        textSize = 15f
+        textSize = 12.2f
         gravity = Gravity.CENTER
         setTextColor(Color.rgb(15, 23, 42))
         bold()
@@ -594,8 +605,18 @@ private fun addCompactOffsetSection(root: LinearLayout) {
     private fun choiceButton(text: String, selected: Boolean, action: (View) -> Unit): Button = Button(this).apply {
         this.text = text
         isAllCaps = false
-        oneUiButton(selected)
         textSize = 13.5f
+        minimumWidth = 0
+        minWidth = 0
+        minimumHeight = 0
+        minHeight = 0
+        includeFontPadding = false
+        setTextColor(if (selected) Color.WHITE else Color.rgb(17, 24, 39))
+        background = if (selected) {
+            gradientBg(Color.rgb(74, 222, 128), Color.rgb(34, 197, 94), 16f, this)
+        } else {
+            roundedBg(Color.rgb(241, 245, 249), 16f, view = this)
+        }
         setPadding(0, 0, 0, 0)
         setOnClickListener(action)
     }
@@ -695,6 +716,30 @@ private fun addCompactOffsetSection(root: LinearLayout) {
         val seconds = (totalTenths / 10L) % 60L
         val tenth = totalTenths % 10L
         return String.format(Locale.getDefault(), "%02d:%02d.%d", minutes, seconds, tenth)
+    }
+
+
+    private fun parseFutureTargetMillis(value: String): Long? {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) return null
+        val patterns = listOf("HH:mm:ss.S", "HH:mm:ss", "HH:mm")
+        for (pattern in patterns) {
+            try {
+                val parser = SimpleDateFormat(pattern, Locale.getDefault()).apply { isLenient = false }
+                val parsed = parser.parse(trimmed) ?: continue
+                val source = java.util.Calendar.getInstance().apply { time = parsed }
+                val now = java.util.Calendar.getInstance()
+                val target = java.util.Calendar.getInstance().apply {
+                    set(java.util.Calendar.HOUR_OF_DAY, source.get(java.util.Calendar.HOUR_OF_DAY))
+                    set(java.util.Calendar.MINUTE, source.get(java.util.Calendar.MINUTE))
+                    set(java.util.Calendar.SECOND, source.get(java.util.Calendar.SECOND))
+                    set(java.util.Calendar.MILLISECOND, source.get(java.util.Calendar.MILLISECOND))
+                }
+                if (target.timeInMillis <= now.timeInMillis) return null
+                return target.timeInMillis
+            } catch (_: Exception) {}
+        }
+        return null
     }
 
     private fun refreshIntervalLabel(ms: Long): String = when (ms) {

@@ -15,8 +15,8 @@ object Platforms {
         Platform("拼多多", "拼", "https://mobile.yangkeduo.com/", 0xFFE02E24.toInt()),
         Platform("华为", "华", "https://www.vmall.com/", 0xFFCF0A2C.toInt()),
         Platform("小米", "米", "https://www.mi.com/", 0xFFFF6900.toInt()),
-        Platform("百度", "百", "https://www.baidu.com/", 0xFF2563EB.toInt()),
-        Platform("B站", "B", "https://www.bilibili.com/", 0xFF00A1D6.toInt()),
-        Platform("Cloudflare", "C", "https://www.cloudflare.com/", 0xFFF38020.toInt())
+        Platform("抖音", "抖", "https://www.douyin.com/", 0xFF111827.toInt()),
+        Platform("微信", "微", "https://weixin.qq.com/", 0xFF0EA75A.toInt()),
+        Platform("亚马逊", "亚", "https://www.amazon.com/", 0xFFF59E0B.toInt())
     )
 }

@@ -121,7 +121,6 @@ class FloatingService : Service() {
         removeMenu()
 
         cfg = ConfigStore.load(this)
-        compact = cfg?.size == ConfigStore.SIZE_SMALL
         latestLatencyMs = if (cfg?.platformUrl == null) 0L else -1L
         serverOffsetMs = 0L
         if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) {
@@ -159,66 +158,65 @@ class FloatingService : Service() {
         startRefreshLoop()
     }
 
-    private fun buildFullView(): LinearLayout {
-        val dark = cfg?.theme != ConfigStore.THEME_LIGHT
-        val opacity = cfg?.opacityPercent ?: 88
-        val bgColor = if (dark) alphaColor(Color.rgb(15, 23, 42), opacity) else alphaColor(Color.WHITE, opacity)
-        val primaryText = if (dark) Color.WHITE else Color.rgb(15, 23, 42)
-        val secondaryText = if (dark) Color.rgb(203, 213, 225) else Color.rgb(71, 85, 105)
-        val scale = sizeScale()
+    
+private fun buildFullView(): LinearLayout {
+    val dark = cfg?.theme != ConfigStore.THEME_LIGHT
+    val opacity = cfg?.opacityPercent ?: 88
+    val bgColor = if (dark) alphaColor(Color.rgb(15, 23, 42), opacity) else alphaColor(Color.WHITE, opacity)
+    val primaryText = if (dark) Color.WHITE else Color.rgb(15, 23, 42)
+    val secondaryText = if (dark) Color.rgb(203, 213, 225) else Color.rgb(71, 85, 105)
+    val scale = 0.78f
 
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding((dp(11) * scale).roundToInt(), (dp(9) * scale).roundToInt(), (dp(11) * scale).roundToInt(), (dp(8) * scale).roundToInt())
-            background = roundedBg(bgColor, 24f, 1, if (dark) Color.argb(52, 255, 255, 255) else Color.rgb(226, 232, 240), this)
-            elevation = dp(10).toFloat()
-            alpha = 1f
+    return LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding((dp(10) * scale).roundToInt(), (dp(8) * scale).roundToInt(), (dp(10) * scale).roundToInt(), (dp(8) * scale).roundToInt())
+        background = roundedBg(bgColor, 22f, 1, if (dark) Color.argb(52, 255, 255, 255) else Color.rgb(226, 232, 240), this)
+        elevation = dp(10).toFloat()
 
-            val top = LinearLayout(this@FloatingService).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
-            sourceView = TextView(this@FloatingService).apply {
-                text = cfg?.platformName ?: "系统时间"
-                textSize = 11.5f * scale
-                gravity = Gravity.CENTER
-                setTextColor(secondaryText)
-                bold()
-                background = roundedBg(if (dark) Color.argb(35, 255, 255, 255) else Color.rgb(248, 250, 252), 999f, 1, Color.argb(28, 148, 163, 184), this)
-                setPadding((dp(8) * scale).roundToInt(), 0, (dp(8) * scale).roundToInt(), 0)
-            }
-            latencyView = TextView(this@FloatingService).apply {
-                text = latencyText(latestLatencyMs)
-                textSize = 11f * scale
-                gravity = Gravity.CENTER
-                setTextColor(latencyColor(latestLatencyMs))
-                bold()
-                background = roundedBg(if (dark) Color.argb(42, 255, 255, 255) else Color.rgb(248, 250, 252), 999f, 1, Color.argb(30, 148, 163, 184), this)
-            }
-            top.addView(statusDot, LinearLayout.LayoutParams((dp(7) * scale).roundToInt(), (dp(7) * scale).roundToInt()))
-            top.addView(sourceView, LinearLayout.LayoutParams(0, (dp(22) * scale).roundToInt(), 1f).apply { leftMargin = (dp(6) * scale).roundToInt(); rightMargin = (dp(6) * scale).roundToInt() })
-            top.addView(latencyView, LinearLayout.LayoutParams((dp(58) * scale).roundToInt(), (dp(22) * scale).roundToInt()))
-
-            timeView = TextView(this@FloatingService).apply {
-                text = "--:--:--.-"
-                textSize = 24f * scale
-                setTextColor(primaryText)
-                includeFontPadding = false
-                bold()
-            }
-            hintView = TextView(this@FloatingService)
-            addView(top, LinearLayout.LayoutParams((dp(158) * scale).roundToInt(), ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (dp(5) * scale).roundToInt() })
+        val top = LinearLayout(this@FloatingService).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        sourceView = TextView(this@FloatingService).apply {
+            text = cfg?.platformName ?: "系统时间"
+            textSize = 10.8f
+            gravity = Gravity.CENTER
+            setTextColor(secondaryText)
+            bold()
+            background = roundedBg(if (dark) Color.argb(35, 255, 255, 255) else Color.rgb(248, 250, 252), 999f, 1, Color.argb(28, 148, 163, 184), this)
+            setPadding((dp(8) * scale).roundToInt(), 0, (dp(8) * scale).roundToInt(), 0)
         }
-    }
+        latencyView = TextView(this@FloatingService).apply {
+            text = latencyText(latestLatencyMs)
+            textSize = 10.6f
+            gravity = Gravity.CENTER
+            setTextColor(latencyColor(latestLatencyMs))
+            bold()
+            background = roundedBg(if (dark) Color.argb(42, 255, 255, 255) else Color.rgb(248, 250, 252), 999f, 1, Color.argb(30, 148, 163, 184), this)
+        }
+        statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
+        val leftWrap = LinearLayout(this@FloatingService).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        leftWrap.addView(statusDot, LinearLayout.LayoutParams((dp(6) * scale).roundToInt(), (dp(6) * scale).roundToInt()).apply { rightMargin = (dp(5) * scale).roundToInt() })
+        leftWrap.addView(sourceView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (dp(22) * scale).roundToInt()))
+        top.addView(leftWrap, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        top.addView(latencyView, LinearLayout.LayoutParams((dp(56) * scale).roundToInt(), (dp(22) * scale).roundToInt()).apply { leftMargin = (dp(7) * scale).roundToInt() })
 
-    private fun buildCompactView(): LinearLayout {
+        timeView = TextView(this@FloatingService).apply {
+            text = "--:--:--.-"
+            textSize = 20.5f
+            setTextColor(primaryText)
+            includeFontPadding = false
+            bold()
+        }
+        hintView = TextView(this@FloatingService)
+        addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (dp(5) * scale).roundToInt() })
+    }
+}
+
+private fun buildCompactView(): LinearLayout {
         val dark = cfg?.theme != ConfigStore.THEME_LIGHT
         val opacity = cfg?.opacityPercent ?: 88
         val bgColor = if (dark) alphaColor(Color.rgb(15, 23, 42), opacity) else alphaColor(Color.WHITE, opacity)
         val primaryText = if (dark) Color.WHITE else Color.rgb(15, 23, 42)
-        val scale = sizeScale()
+        val scale = 0.78f
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -229,7 +227,7 @@ class FloatingService : Service() {
             statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
             timeView = TextView(this@FloatingService).apply {
                 text = "--:--:--.-"
-                textSize = 17f * scale
+                textSize = 19f * scale
                 setTextColor(primaryText)
                 includeFontPadding = false
                 bold()
@@ -450,15 +448,7 @@ class FloatingService : Service() {
         if (::statusDot.isInitialized) statusDot.background = roundedBg(latencyColor(latestLatencyMs), 999f, view = statusDot)
     }
 
-    private fun updateHint() {
-        if (!::hintView.isInitialized) return
-        val text = when {
-            paused -> "已暂停刷新 · 长按菜单可恢复"
-            cfg?.mode == ConfigStore.MODE_COUNTDOWN -> "倒计时模式 · 长按菜单可关闭"
-            else -> "单击精简 · 长按菜单 · 通知栏可关闭"
-        }
-        hintView.text = text
-    }
+    private fun updateHint() { if (::hintView.isInitialized) hintView.text = "" }
 
     private fun displayText(): String {
         val current = cfg ?: return "--:--:--.-"
