@@ -120,6 +120,7 @@ class FloatingService : Service() {
         removeMenu()
 
         cfg = ConfigStore.load(this)
+        compact = cfg?.size == ConfigStore.SIZE_SMALL
         latestLatencyMs = if (cfg?.platformUrl == null) 0L else -1L
         serverOffsetMs = 0L
         if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) {

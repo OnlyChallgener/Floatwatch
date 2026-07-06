@@ -36,6 +36,17 @@ class LatencyTester {
 
         suspend fun test(url: String): Result = testInternal(url)
 
+        suspend fun stableTest(url: String, repeats: Int = 3): Result {
+            var best: Result? = null
+            repeat(repeats) {
+                val r = testInternal(url)
+                if (r.latencyMs >= 0 && (best == null || r.latencyMs < best!!.latencyMs)) {
+                    best = r
+                }
+            }
+            return best ?: Result(-1, null)
+        }
+
         private suspend fun testInternal(url: String): Result = withContext(Dispatchers.IO) {
             val request = Request.Builder()
                 .url(url)
