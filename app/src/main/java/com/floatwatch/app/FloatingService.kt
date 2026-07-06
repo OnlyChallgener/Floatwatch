@@ -9,6 +9,8 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
@@ -28,6 +30,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.max
@@ -120,7 +123,11 @@ class FloatingService : Service() {
         latestLatencyMs = if (cfg?.platformUrl == null) 0L else -1L
         serverOffsetMs = 0L
         if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) {
-            countdownEndAtMs = System.currentTimeMillis() + (cfg?.countdownMs ?: 30000L)
+            val current = cfg
+            countdownEndAtMs = resolveCountdownEndAt(
+                targetText = current?.countdownTargetText.orEmpty(),
+                durationMs = current?.countdownMs ?: 30000L
+            )
         }
 
         val view = if (compact) buildCompactView() else buildFullView()
@@ -195,17 +202,9 @@ class FloatingService : Service() {
                 includeFontPadding = false
                 bold()
             }
-            hintView = TextView(this@FloatingService).apply {
-                text = "单击精简 · 长按菜单 · 通知栏可关闭"
-                textSize = 10f * scale
-                setTextColor(secondaryText)
-            }
+            hintView = TextView(this@FloatingService)
             addView(top, LinearLayout.LayoutParams((dp(190) * scale).roundToInt(), ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (dp(8) * scale).roundToInt() })
-            addView(hintView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (dp(6) * scale).roundToInt() })
-
-            setOnClickListener { compact = true; showFloatingView() }
-            setOnLongClickListener { showFloatingMenu(); true }
         }
     }
 
@@ -240,20 +239,25 @@ class FloatingService : Service() {
             hintView = TextView(this@FloatingService)
             addView(statusDot, LinearLayout.LayoutParams((dp(7) * scale).roundToInt(), (dp(7) * scale).roundToInt()))
             addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = (dp(8) * scale).roundToInt() })
-            if (cfg?.showLatency != false) {
-                addView(latencyView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = (dp(8) * scale).roundToInt() })
-            }
-            setOnClickListener { compact = false; showFloatingView() }
-            setOnLongClickListener { showFloatingMenu(); true }
+            // 精简模式只显示核心时间，仍保留 0.1 秒；不再附带额外提示文字。
         }
     }
 
     private fun makeDraggable(view: View, lp: WindowManager.LayoutParams) {
+        val handler = Handler(Looper.getMainLooper())
         var downRawX = 0f
         var downRawY = 0f
         var startX = 0
         var startY = 0
         var moved = false
+        var longPressed = false
+        val longPressRunnable = Runnable {
+            if (!moved) {
+                longPressed = true
+                showFloatingMenu()
+            }
+        }
+
         view.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -262,27 +266,39 @@ class FloatingService : Service() {
                     startX = lp.x
                     startY = lp.y
                     moved = false
+                    longPressed = false
                     v.alpha = 0.88f
-                    false
+                    handler.postDelayed(longPressRunnable, 1000L)
+                    true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - downRawX).roundToInt()
                     val dy = (event.rawY - downRawY).roundToInt()
-                    if (kotlin.math.abs(dx) > dp(4) || kotlin.math.abs(dy) > dp(4)) moved = true
+                    if (kotlin.math.abs(dx) > dp(8) || kotlin.math.abs(dy) > dp(8)) {
+                        moved = true
+                        handler.removeCallbacks(longPressRunnable)
+                    }
                     lp.x = startX + dx
                     lp.y = startY + dy
                     safeUpdate(v, lp)
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(longPressRunnable)
                     v.alpha = 1f
-                    if (moved) {
-                        snapToEdge(v, lp)
-                        ConfigStore.savePosition(this, lp.x, lp.y)
-                        true
-                    } else false
+                    when {
+                        moved -> {
+                            snapToEdge(v, lp)
+                            ConfigStore.savePosition(this, lp.x, lp.y)
+                        }
+                        !longPressed -> {
+                            compact = !compact
+                            showFloatingView()
+                        }
+                    }
+                    true
                 }
-                else -> false
+                else -> true
             }
         }
     }
@@ -442,7 +458,7 @@ class FloatingService : Service() {
     private fun displayText(): String {
         val current = cfg ?: return "--:--:--.-"
         return if (current.mode == ConfigStore.MODE_COUNTDOWN) {
-            val remain = max(0L, countdownEndAtMs - System.currentTimeMillis() + current.offsetMs)
+            val remain = max(0L, countdownEndAtMs - (System.currentTimeMillis() + current.offsetMs + serverOffsetMs))
             if (remain == 0L) {
                 if (::timeView.isInitialized) timeView.setTextColor(Color.rgb(248, 113, 113))
             }
@@ -461,6 +477,30 @@ class FloatingService : Service() {
         return String.format(Locale.getDefault(), "%02d:%02d.%d", minutes, seconds, tenth)
     }
 
+    private fun resolveCountdownEndAt(targetText: String, durationMs: Long): Long {
+        val trimmed = targetText.trim()
+        if (trimmed.isBlank()) return System.currentTimeMillis() + durationMs
+
+        val patterns = listOf("HH:mm:ss.S", "HH:mm:ss", "HH:mm")
+        for (pattern in patterns) {
+            try {
+                val parser = SimpleDateFormat(pattern, Locale.getDefault()).apply { isLenient = false }
+                val parsed = parser.parse(trimmed) ?: continue
+                val source = Calendar.getInstance().apply { time = parsed }
+                val target = Calendar.getInstance().apply {
+                    set(Calendar.HOUR_OF_DAY, source.get(Calendar.HOUR_OF_DAY))
+                    set(Calendar.MINUTE, source.get(Calendar.MINUTE))
+                    set(Calendar.SECOND, source.get(Calendar.SECOND))
+                    set(Calendar.MILLISECOND, source.get(Calendar.MILLISECOND))
+                }
+                if (target.timeInMillis <= System.currentTimeMillis()) target.add(Calendar.DAY_OF_YEAR, 1)
+                return target.timeInMillis
+            } catch (_: Exception) {
+            }
+        }
+        return System.currentTimeMillis() + durationMs
+    }
+
     private fun sizeScale(): Float = when (cfg?.size) {
         ConfigStore.SIZE_SMALL -> 0.86f
         ConfigStore.SIZE_LARGE -> 1.14f
@@ -468,6 +508,14 @@ class FloatingService : Service() {
     }
 
     private fun buildNotification(): Notification {
+        val openAppIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            pendingFlags()
+        )
         val showIntent = PendingIntent.getService(this, 1, Intent(this, FloatingService::class.java).apply { action = ACTION_SHOW }, pendingFlags())
         val hideIntent = PendingIntent.getService(this, 2, Intent(this, FloatingService::class.java).apply { action = ACTION_HIDE }, pendingFlags())
         val stopIntent = PendingIntent.getService(this, 3, Intent(this, FloatingService::class.java).apply { action = ACTION_STOP }, pendingFlags())
@@ -481,7 +529,8 @@ class FloatingService : Service() {
         }
             .setSmallIcon(android.R.drawable.ic_menu_recent_history)
             .setContentTitle("Floatwatch 正在运行")
-            .setContentText("通知栏可显示、隐藏、暂停或停止悬浮窗")
+            .setContentText("点击回到 APP，通知栏可显示、隐藏、暂停或停止悬浮窗")
+            .setContentIntent(openAppIntent)
             .setOngoing(true)
             .addAction(android.R.drawable.ic_menu_view, "显示", showIntent)
             .addAction(android.R.drawable.ic_media_pause, "暂停", pauseIntent)

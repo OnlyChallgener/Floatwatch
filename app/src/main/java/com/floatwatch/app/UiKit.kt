@@ -68,7 +68,7 @@ fun LinearLayout.addViewWithMargins(
 
 fun Button.oneUiButton(selected: Boolean) {
     isAllCaps = false
-    textSize = 15f
+    textSize = 14f
     setTextColor(if (selected) Color.WHITE else Color.rgb(17, 24, 39))
     background = if (selected) {
         gradientBg(Color.rgb(74, 222, 128), Color.rgb(34, 197, 94), 999f, this)

@@ -26,6 +26,7 @@ object ConfigStore {
         val autoRefresh: Boolean,
         val refreshIntervalMs: Long,
         val countdownMs: Long,
+        val countdownTargetText: String,
         val opacityPercent: Int,
         val size: String,
         val theme: String,
@@ -49,6 +50,7 @@ object ConfigStore {
             autoRefresh = sp.getBoolean("autoRefresh", true),
             refreshIntervalMs = sp.getLong("refreshIntervalMs", 5000L),
             countdownMs = sp.getLong("countdownMs", 30000L),
+            countdownTargetText = sp.getString("countdownTargetText", "") ?: "",
             opacityPercent = sp.getInt("opacityPercent", 88),
             size = sp.getString("size", SIZE_MEDIUM) ?: SIZE_MEDIUM,
             theme = sp.getString("theme", THEME_DARK) ?: THEME_DARK,
@@ -88,10 +90,11 @@ object ConfigStore {
             .apply()
     }
 
-    fun saveCountdown(context: Context, countdownMs: Long) {
+    fun saveCountdown(context: Context, countdownMs: Long, targetText: String = load(context).countdownTargetText) {
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
             .putLong("countdownMs", countdownMs)
+            .putString("countdownTargetText", targetText.trim())
             .apply()
     }
 

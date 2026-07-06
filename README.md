@@ -1,61 +1,34 @@
-# Floatwatch V2.1 One UI
+# Floatwatch V2.2 Compact
 
-Android 悬浮秒表 / 悬浮时钟工具。App 显示名：悬浮秒表。包名：`com.floatwatch.app`。
+本版重点：紧凑底部弹窗、两步开启悬浮、毫秒显示统一到 0.1 秒、倒计时预设和结束时间逻辑修正。
 
-## V2.1 更新
+## 更新点
 
-- 新彩色 LOGO：渐变背景 + 悬浮时钟表盘 + 同步状态点。
-- 设置界面改成底部弹出 Bottom Sheet，不再固定在底部。
-- 设置面板支持：
-  - 时钟模式
-  - 倒计时模式
-  - 时间偏移滑动条（-500ms 到 +500ms）
-  - ±10ms 微调
-  - 网络延迟显示
-  - 立即刷新
-  - 自动刷新开关
-  - 刷新间隔：3秒 / 5秒 / 10秒
-  - 倒计时时长滑动条
-  - 快捷倒计时：5秒 / 10秒 / 30秒 / 1分
-  - 悬浮窗透明度
-  - 悬浮窗大小：小 / 中 / 大
-  - 深色 / 浅色主题
-- 悬浮小窗 One UI HUD 风格：大圆角、半透明、胶囊延迟标签。
-- 悬浮状态关闭方式：
-  - 通知栏：显示 / 暂停 / 隐藏 / 停止
-  - 悬浮窗长按菜单：精简模式、暂停刷新、隐藏、停止
-  - 单击悬浮窗：完整模式 / 精简模式切换
-- 拖动后自动吸附左右边缘，并记忆位置。
-- GitHub Actions 自动签名、自动构建 APK、自动创建 Release。
+- 首页底部拆分为：`设置` 和 `开启悬浮时钟`
+- 首页点击 `开启悬浮时钟` 只弹出悬浮配置，不直接启动
+- 弹窗底部再次点击 `开启悬浮时钟` 才真正创建悬浮窗
+- 悬浮设置页参考紧凑卡片：字更小、按钮更小、行距更紧凑
+- 时钟模式 / 倒计时模式分开显示，不把全部内容堆在一起
+- 时间偏移统一为：`提前 / 延后 + 0~1000ms`
+- 完整模式和精简模式都显示到小数点后一位，例如 `13:41:08.2`
+- 倒计时预设改为：`30s / 1min / 3min / 5min`
+- 倒计时结束时间支持输入，例如 `12:00:00.0`
+- 倒计时优先级：结束时间 > 预设时间
+- 完整悬浮窗去掉底部“长按提示”文字
+- 长按 1 秒才显示悬浮菜单，短按只切换完整/精简
+- 通知点击可回到 App
+- 增加华为卡片：`https://www.vmall.com/`
 
-## GitHub Secrets
-
-仓库需要以下 Secrets：
-
-- `KEYSTORE_BASE64`
-- `KEYSTORE_PASSWORD`
-- `KEY_ALIAS`
-- `KEY_PASSWORD`
-
-## 覆盖到现有仓库
-
-假设解压到：
-
-```bash
-D:\Projects\Floatwatch_V2_1_OneUI
-```
-
-Git Bash：
+## 覆盖方式
 
 ```bash
 cd /d/github/Floatwatch
 rm -rf app .github
-cp -r /d/Projects/Floatwatch_V2_1_OneUI/* .
-cp -r /d/Projects/Floatwatch_V2_1_OneUI/.github .
-git status
+cp -r /d/Projects/Floatwatch_V2_2_Compact/* .
+cp -r /d/Projects/Floatwatch_V2_2_Compact/.github .
 git add .
-git commit -m "Upgrade to Floatwatch V2.1 OneUI"
+git commit -m "Upgrade to Floatwatch V2.2 compact sheet"
 git push
 ```
 
-推送后在 GitHub → Actions 等待构建，成功后在 Releases 下载 APK。
+GitHub Actions 会自动构建签名 APK 并创建 Release。
