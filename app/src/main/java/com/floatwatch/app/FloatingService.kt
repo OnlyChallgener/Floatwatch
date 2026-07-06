@@ -45,6 +45,7 @@ class FloatingService : Service() {
         const val ACTION_STOP = "com.floatwatch.app.action.STOP"
         const val ACTION_TOGGLE_COMPACT = "com.floatwatch.app.action.TOGGLE_COMPACT"
         const val ACTION_PAUSE_REFRESH = "com.floatwatch.app.action.PAUSE_REFRESH"
+        const val EXTRA_RELOAD_CONFIG = "com.floatwatch.app.extra.RELOAD_CONFIG"
 
         private const val CHANNEL_ID = "floatwatch_running"
         private const val NOTIFICATION_ID = 24021
@@ -93,7 +94,8 @@ class FloatingService : Service() {
         when (action) {
             ACTION_SHOW -> {
                 paused = false
-                showFloatingView()
+                val reload = intent?.getBooleanExtra(EXTRA_RELOAD_CONFIG, cfg == null) ?: (cfg == null)
+                showFloatingView(reloadConfig = reload)
             }
             ACTION_HIDE -> removeFloatingView()
             ACTION_STOP -> {
@@ -104,7 +106,7 @@ class FloatingService : Service() {
             }
             ACTION_TOGGLE_COMPACT -> {
                 compact = !compact
-                showFloatingView()
+                showFloatingView(reloadConfig = false)
             }
             ACTION_PAUSE_REFRESH -> {
                 paused = !paused
@@ -115,22 +117,25 @@ class FloatingService : Service() {
         return START_STICKY
     }
 
-    private fun showFloatingView() {
+    private fun showFloatingView(reloadConfig: Boolean = true) {
         if (!Settings.canDrawOverlays(this)) return
         removeFloatingView()
         removeMenu()
 
-        cfg = ConfigStore.load(this)
-        latestLatencyMs = if (cfg?.platformUrl == null) 0L else -1L
-        serverOffsetMs = 0L
-        if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) {
-            val current = cfg
-            countdownEndAtMs = resolveCountdownEndAt(
-                targetText = current?.countdownTargetText.orEmpty(),
-                durationMs = current?.countdownMs ?: 30000L
-            )
+        if (reloadConfig || cfg == null) {
+            cfg = ConfigStore.load(this)
+            latestLatencyMs = if (cfg?.platformUrl == null) 0L else -1L
+            serverOffsetMs = 0L
+            if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) {
+                val current = cfg
+                countdownEndAtMs = resolveCountdownEndAt(
+                    targetText = current?.countdownTargetText.orEmpty(),
+                    durationMs = current?.countdownMs ?: 0L
+                )
+            }
         }
 
+        val currentCfg = cfg ?: return
         val view = if (compact) buildCompactView() else buildFullView()
         floatingView = view
 
@@ -146,9 +151,9 @@ class FloatingService : Service() {
             format = PixelFormat.TRANSLUCENT
             flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             gravity = Gravity.TOP or Gravity.START
-            val savedX = cfg?.x ?: Int.MIN_VALUE
+            val savedX = currentCfg.x
             x = if (savedX == Int.MIN_VALUE) windowManager.defaultDisplayWidth() - dp(190) else savedX
-            y = cfg?.y ?: dp(180)
+            y = currentCfg.y
         }
         floatingParams = params
         windowManager.addView(view, params)
@@ -165,12 +170,12 @@ private fun buildFullView(): LinearLayout {
     val bgColor = if (dark) alphaColor(Color.rgb(15, 23, 42), opacity) else alphaColor(Color.WHITE, opacity)
     val primaryText = if (dark) Color.WHITE else Color.rgb(15, 23, 42)
     val secondaryText = if (dark) Color.rgb(203, 213, 225) else Color.rgb(71, 85, 105)
-    val scale = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) 0.86f else 0.82f
+    val scale = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) 0.92f else 0.88f
 
     return LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        minimumWidth = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) dp(156) else dp(142)
-        setPadding((dp(11) * scale).roundToInt(), (dp(9) * scale).roundToInt(), (dp(11) * scale).roundToInt(), (dp(9) * scale).roundToInt())
+        minimumWidth = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) dp(174) else dp(154)
+        setPadding((dp(12) * scale).roundToInt(), (dp(10) * scale).roundToInt(), (dp(12) * scale).roundToInt(), (dp(10) * scale).roundToInt())
         background = roundedBg(bgColor, 22f, 1, if (dark) Color.argb(52, 255, 255, 255) else Color.rgb(226, 232, 240), this)
         elevation = dp(10).toFloat()
 
@@ -195,20 +200,20 @@ private fun buildFullView(): LinearLayout {
         statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
         val leftWrap = LinearLayout(this@FloatingService).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         leftWrap.addView(statusDot, LinearLayout.LayoutParams((dp(6) * scale).roundToInt(), (dp(6) * scale).roundToInt()).apply { rightMargin = (dp(5) * scale).roundToInt() })
-        leftWrap.addView(sourceView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (dp(24) * scale).roundToInt()))
+        leftWrap.addView(sourceView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (dp(26) * scale).roundToInt()))
         top.addView(leftWrap, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        top.addView(latencyView, LinearLayout.LayoutParams((dp(62) * scale).roundToInt(), (dp(24) * scale).roundToInt()).apply { leftMargin = (dp(8) * scale).roundToInt() })
+        top.addView(latencyView, LinearLayout.LayoutParams((dp(68) * scale).roundToInt(), (dp(26) * scale).roundToInt()).apply { leftMargin = (dp(8) * scale).roundToInt() })
 
         timeView = TextView(this@FloatingService).apply {
             text = "--:--:--.-"
-            textSize = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) 26f else 22.8f
+            textSize = if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) 27f else 23.5f
             setTextColor(primaryText)
             includeFontPadding = false
             bold()
         }
         hintView = TextView(this@FloatingService)
         addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (dp(5) * scale).roundToInt() })
+        addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (dp(6) * scale).roundToInt() })
     }
 }
 
@@ -217,19 +222,19 @@ private fun buildCompactView(): LinearLayout {
         val opacity = cfg?.opacityPercent ?: 88
         val bgColor = if (dark) alphaColor(Color.rgb(15, 23, 42), opacity) else alphaColor(Color.WHITE, opacity)
         val primaryText = if (dark) Color.WHITE else Color.rgb(15, 23, 42)
-        val scale = 0.88f
+        val scale = 0.96f
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(36)
-            setPadding((dp(13) * scale).roundToInt(), (dp(9) * scale).roundToInt(), (dp(13) * scale).roundToInt(), (dp(9) * scale).roundToInt())
+            minimumHeight = dp(42)
+            setPadding((dp(14) * scale).roundToInt(), (dp(10) * scale).roundToInt(), (dp(14) * scale).roundToInt(), (dp(10) * scale).roundToInt())
             background = roundedBg(bgColor, 999f, 1, if (dark) Color.argb(55, 255, 255, 255) else Color.rgb(226, 232, 240), this)
             elevation = dp(10).toFloat()
             statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
             timeView = TextView(this@FloatingService).apply {
                 text = "--:--:--.-"
-                textSize = 18.5f * scale
+                textSize = 18.8f * scale
                 setTextColor(primaryText)
                 includeFontPadding = false
                 bold()
@@ -297,7 +302,7 @@ private fun buildCompactView(): LinearLayout {
                         }
                         !longPressed -> {
                             compact = !compact
-                            showFloatingView()
+                            showFloatingView(reloadConfig = false)
                         }
                     }
                     true
@@ -337,7 +342,7 @@ private fun buildCompactView(): LinearLayout {
         menu.addView(menuButton(if (compact) "完整模式" else "精简模式") {
             compact = !compact
             removeMenu()
-            showFloatingView()
+            showFloatingView(reloadConfig = false)
         })
         menu.addView(menuButton(if (paused) "恢复刷新" else "暂停刷新") {
             paused = !paused
@@ -513,7 +518,10 @@ private fun buildCompactView(): LinearLayout {
             openIntent,
             pendingFlags()
         )
-        val showIntent = PendingIntent.getService(this, 1, Intent(this, FloatingService::class.java).apply { action = ACTION_SHOW }, pendingFlags())
+        val showIntent = PendingIntent.getService(this, 1, Intent(this, FloatingService::class.java).apply {
+            action = ACTION_SHOW
+            putExtra(EXTRA_RELOAD_CONFIG, false)
+        }, pendingFlags())
         val hideIntent = PendingIntent.getService(this, 2, Intent(this, FloatingService::class.java).apply { action = ACTION_HIDE }, pendingFlags())
         val stopIntent = PendingIntent.getService(this, 3, Intent(this, FloatingService::class.java).apply { action = ACTION_STOP }, pendingFlags())
         val pauseIntent = PendingIntent.getService(this, 4, Intent(this, FloatingService::class.java).apply { action = ACTION_PAUSE_REFRESH }, pendingFlags())
