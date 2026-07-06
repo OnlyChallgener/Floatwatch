@@ -3,6 +3,7 @@ package com.floatwatch.app
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.graphics.Color
@@ -15,6 +16,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import kotlinx.coroutines.CoroutineScope
@@ -28,297 +30,367 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 class FloatingService : Service() {
     companion object {
-        const val EXTRA_PLATFORM_NAME = "platform_name"
-        const val EXTRA_PLATFORM_URL = "platform_url"
-        const val EXTRA_OFFSET_MS = "offset_ms"
-        const val EXTRA_REFRESH_INTERVAL_MS = "refresh_interval_ms"
-        const val EXTRA_STOPWATCH_MODE = "stopwatch_mode"
+        const val ACTION_SHOW = "com.floatwatch.app.action.SHOW"
+        const val ACTION_HIDE = "com.floatwatch.app.action.HIDE"
+        const val ACTION_STOP = "com.floatwatch.app.action.STOP"
+        const val ACTION_TOGGLE_COMPACT = "com.floatwatch.app.action.TOGGLE_COMPACT"
+        const val ACTION_PAUSE_REFRESH = "com.floatwatch.app.action.PAUSE_REFRESH"
 
-        private const val CHANNEL_ID = "floatwatch_overlay"
-        private const val NOTIFICATION_ID = 10086
-
-        private const val ONE_UI_CARD = 0xF21D212B.toInt()
-        private const val ONE_UI_CARD_COMPACT = 0xF2222632.toInt()
-        private const val ONE_UI_TEXT = 0xFFFFFFFF.toInt()
-        private const val ONE_UI_MUTED = 0xFFB8C0CC.toInt()
-        private const val ONE_UI_STROKE = 0x22FFFFFF
-        private const val ONE_UI_GREEN = 0xFF4ADE80.toInt()
-        private const val ONE_UI_ORANGE = 0xFFFBBF24.toInt()
-        private const val ONE_UI_RED = 0xFFF87171.toInt()
-        private const val ONE_UI_GRAY = 0xFFCBD5E1.toInt()
+        private const val CHANNEL_ID = "floatwatch_running"
+        private const val NOTIFICATION_ID = 24021
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var refreshJob: Job? = null
-    private var clockJob: Job? = null
-
     private lateinit var windowManager: WindowManager
-    private var overlayView: LinearLayout? = null
-    private var params: WindowManager.LayoutParams? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var clockJob: Job? = null
+    private var refreshJob: Job? = null
 
-    private lateinit var topRow: LinearLayout
-    private lateinit var statusDot: View
-    private lateinit var titleView: TextView
-    private lateinit var timeView: TextView
-    private lateinit var latencyView: TextView
-    private lateinit var hintView: TextView
-
-    private var platformName = "系统时间"
-    private var platformUrl: String? = null
-    private var offsetMs = 0L
-    private var serverOffsetMs = 0L
-    private var latestLatencyMs = 0L
-    private var refreshIntervalMs = 5000L
-    private var stopwatchMode = false
+    private var floatingView: View? = null
+    private var floatingParams: WindowManager.LayoutParams? = null
+    private var menuView: View? = null
     private var compact = false
-    private var stopwatchStartMs = 0L
+    private var paused = false
+
+    private var cfg: ConfigStore.WatchConfig? = null
+    private var latestLatencyMs: Long = 0L
+    private var serverOffsetMs: Long = 0L
+    private var countdownEndAtMs: Long = 0L
+
+    private lateinit var statusDot: View
+    private lateinit var sourceView: TextView
+    private lateinit var latencyView: TextView
+    private lateinit var timeView: TextView
+    private lateinit var hintView: TextView
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        platformName = intent?.getStringExtra(EXTRA_PLATFORM_NAME) ?: "系统时间"
-        platformUrl = intent?.getStringExtra(EXTRA_PLATFORM_URL)
-        offsetMs = intent?.getLongExtra(EXTRA_OFFSET_MS, 0L) ?: 0L
-        refreshIntervalMs = intent?.getLongExtra(EXTRA_REFRESH_INTERVAL_MS, 5000L) ?: 5000L
-        stopwatchMode = intent?.getBooleanExtra(EXTRA_STOPWATCH_MODE, false) ?: false
-        stopwatchStartMs = System.currentTimeMillis()
-
-        if (!Settings.canDrawOverlays(this)) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        removeOverlay()
-        addOverlay()
-        startClockLoop()
-        startRefreshLoop()
-        return START_STICKY
+        createChannel()
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+        removeFloatingView()
+        removeMenu()
         scope.cancel()
-        removeOverlay()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun addOverlay() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(14), dp(11), dp(14), dp(11))
-            background = roundedBg(ONE_UI_CARD, 24f, 1, ONE_UI_STROKE, this)
-            elevation = dp(14).toFloat()
-            alpha = 0.98f
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action ?: ACTION_SHOW
+        startForeground(NOTIFICATION_ID, buildNotification())
+        when (action) {
+            ACTION_SHOW -> {
+                paused = false
+                showFloatingView()
+            }
+            ACTION_HIDE -> removeFloatingView()
+            ACTION_STOP -> {
+                removeFloatingView()
+                removeMenu()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+            ACTION_TOGGLE_COMPACT -> {
+                compact = !compact
+                showFloatingView()
+            }
+            ACTION_PAUSE_REFRESH -> {
+                paused = !paused
+                updateHint()
+            }
+            else -> showFloatingView()
+        }
+        return START_STICKY
+    }
+
+    private fun showFloatingView() {
+        if (!Settings.canDrawOverlays(this)) return
+        removeFloatingView()
+        removeMenu()
+
+        cfg = ConfigStore.load(this)
+        latestLatencyMs = if (cfg?.platformUrl == null) 0L else -1L
+        serverOffsetMs = 0L
+        if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) {
+            countdownEndAtMs = System.currentTimeMillis() + (cfg?.countdownMs ?: 30000L)
         }
 
-        topRow = LinearLayout(this).apply {
+        val view = if (compact) buildCompactView() else buildFullView()
+        floatingView = view
+
+        val params = WindowManager.LayoutParams().apply {
+            width = WindowManager.LayoutParams.WRAP_CONTENT
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+            format = PixelFormat.TRANSLUCENT
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            gravity = Gravity.TOP or Gravity.START
+            val savedX = cfg?.x ?: Int.MIN_VALUE
+            x = if (savedX == Int.MIN_VALUE) windowManager.defaultDisplayWidth() - dp(190) else savedX
+            y = cfg?.y ?: dp(180)
+        }
+        floatingParams = params
+        windowManager.addView(view, params)
+
+        makeDraggable(view, params)
+        startClockLoop()
+        startRefreshLoop()
+    }
+
+    private fun buildFullView(): LinearLayout {
+        val dark = cfg?.theme != ConfigStore.THEME_LIGHT
+        val opacity = cfg?.opacityPercent ?: 88
+        val bgColor = if (dark) alphaColor(Color.rgb(15, 23, 42), opacity) else alphaColor(Color.WHITE, opacity)
+        val primaryText = if (dark) Color.WHITE else Color.rgb(15, 23, 42)
+        val secondaryText = if (dark) Color.rgb(203, 213, 225) else Color.rgb(71, 85, 105)
+        val scale = sizeScale()
+
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((dp(14) * scale).roundToInt(), (dp(12) * scale).roundToInt(), (dp(14) * scale).roundToInt(), (dp(10) * scale).roundToInt())
+            background = roundedBg(bgColor, 28f, 1, if (dark) Color.argb(60, 255, 255, 255) else Color.rgb(226, 232, 240), this)
+            elevation = dp(12).toFloat()
+            alpha = 1f
+
+            val top = LinearLayout(this@FloatingService).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
+            sourceView = TextView(this@FloatingService).apply {
+                text = cfg?.platformName ?: "系统时间"
+                textSize = 13f * scale
+                setTextColor(secondaryText)
+                bold()
+            }
+            latencyView = TextView(this@FloatingService).apply {
+                text = latencyText(latestLatencyMs)
+                textSize = 12f * scale
+                gravity = Gravity.CENTER
+                setTextColor(latencyColor(latestLatencyMs))
+                bold()
+                background = roundedBg(if (dark) Color.argb(42, 255, 255, 255) else Color.rgb(248, 250, 252), 999f, 1, Color.argb(35, 148, 163, 184), this)
+            }
+            top.addView(statusDot, LinearLayout.LayoutParams((dp(8) * scale).roundToInt(), (dp(8) * scale).roundToInt()))
+            top.addView(sourceView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = (dp(8) * scale).roundToInt() })
+            top.addView(latencyView, LinearLayout.LayoutParams((dp(70) * scale).roundToInt(), (dp(28) * scale).roundToInt()))
+
+            timeView = TextView(this@FloatingService).apply {
+                text = "--:--:--.-"
+                textSize = 30f * scale
+                setTextColor(primaryText)
+                includeFontPadding = false
+                bold()
+            }
+            hintView = TextView(this@FloatingService).apply {
+                text = "单击精简 · 长按菜单 · 通知栏可关闭"
+                textSize = 10f * scale
+                setTextColor(secondaryText)
+            }
+            addView(top, LinearLayout.LayoutParams((dp(190) * scale).roundToInt(), ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (dp(8) * scale).roundToInt() })
+            addView(hintView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (dp(6) * scale).roundToInt() })
+
+            setOnClickListener { compact = true; showFloatingView() }
+            setOnLongClickListener { showFloatingMenu(); true }
+        }
+    }
+
+    private fun buildCompactView(): LinearLayout {
+        val dark = cfg?.theme != ConfigStore.THEME_LIGHT
+        val opacity = cfg?.opacityPercent ?: 88
+        val bgColor = if (dark) alphaColor(Color.rgb(15, 23, 42), opacity) else alphaColor(Color.WHITE, opacity)
+        val primaryText = if (dark) Color.WHITE else Color.rgb(15, 23, 42)
+        val scale = sizeScale()
+
+        return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-        }
-
-        statusDot = View(this).apply {
-            background = roundedBg(ONE_UI_GREEN, 999f, view = this)
-        }
-
-        titleView = TextView(this).apply {
-            text = platformName
-            textSize = 12.5f
-            setTextColor(ONE_UI_MUTED)
-            includeFontPadding = false
-            maxLines = 1
-            bold()
-        }
-
-        latencyView = TextView(this).apply {
-            text = if (platformUrl == null) "0 ms" else "-- ms"
-            textSize = 11.5f
-            setTextColor(ONE_UI_GREEN)
-            gravity = Gravity.CENTER
-            includeFontPadding = false
-            setPadding(dp(9), dp(4), dp(9), dp(4))
-            background = roundedBg(0x1F4ADE80, 999f, 1, 0x334ADE80, this)
-            bold()
-        }
-
-        topRow.addView(statusDot, LinearLayout.LayoutParams(dp(7), dp(7)))
-        topRow.addView(titleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            leftMargin = dp(7)
-            rightMargin = dp(10)
-        })
-        topRow.addView(latencyView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(24)))
-
-        timeView = TextView(this).apply {
-            text = "--:--:--.-"
-            textSize = 25f
-            setTextColor(ONE_UI_TEXT)
-            gravity = Gravity.CENTER
-            includeFontPadding = false
-            letterSpacing = 0.02f
-            bold()
-        }
-
-        hintView = TextView(this).apply {
-            text = if (stopwatchMode) "秒表 · 单击收起 · 拖动移动" else "时间校准 · 单击收起 · 拖动移动"
-            textSize = 10.5f
-            setTextColor(0x99FFFFFF.toInt())
-            gravity = Gravity.CENTER
-            includeFontPadding = false
-        }
-
-        root.addView(topRow, LinearLayout.LayoutParams(dp(180), ViewGroup.LayoutParams.WRAP_CONTENT))
-        root.addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(7)
-        })
-        root.addView(hintView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(7)
-        })
-
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
-
-        val lp = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = dp(18)
-            y = dp(120)
-        }
-
-        attachDragAndClick(root, lp)
-        overlayView = root
-        params = lp
-        windowManager.addView(root, lp)
-    }
-
-    private fun removeOverlay() {
-        overlayView?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Exception) {
+            setPadding((dp(12) * scale).roundToInt(), (dp(8) * scale).roundToInt(), (dp(12) * scale).roundToInt(), (dp(8) * scale).roundToInt())
+            background = roundedBg(bgColor, 999f, 1, if (dark) Color.argb(55, 255, 255, 255) else Color.rgb(226, 232, 240), this)
+            elevation = dp(10).toFloat()
+            statusDot = View(this@FloatingService).apply { background = roundedBg(latencyColor(latestLatencyMs), 999f, view = this) }
+            timeView = TextView(this@FloatingService).apply {
+                text = "--:--:--.-"
+                textSize = 18f * scale
+                setTextColor(primaryText)
+                includeFontPadding = false
+                bold()
             }
+            latencyView = TextView(this@FloatingService).apply {
+                text = latencyText(latestLatencyMs)
+                textSize = 11f * scale
+                setTextColor(latencyColor(latestLatencyMs))
+                bold()
+            }
+            sourceView = TextView(this@FloatingService)
+            hintView = TextView(this@FloatingService)
+            addView(statusDot, LinearLayout.LayoutParams((dp(7) * scale).roundToInt(), (dp(7) * scale).roundToInt()))
+            addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = (dp(8) * scale).roundToInt() })
+            if (cfg?.showLatency != false) {
+                addView(latencyView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = (dp(8) * scale).roundToInt() })
+            }
+            setOnClickListener { compact = false; showFloatingView() }
+            setOnLongClickListener { showFloatingMenu(); true }
         }
-        overlayView = null
-        params = null
     }
 
-    private fun attachDragAndClick(view: LinearLayout, lp: WindowManager.LayoutParams) {
-        var downX = 0f
-        var downY = 0f
+    private fun makeDraggable(view: View, lp: WindowManager.LayoutParams) {
+        var downRawX = 0f
+        var downRawY = 0f
         var startX = 0
         var startY = 0
         var moved = false
-
-        view.setOnTouchListener { _, event ->
-            when (event.action) {
+        view.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    downX = event.rawX
-                    downY = event.rawY
+                    downRawX = event.rawX
+                    downRawY = event.rawY
                     startX = lp.x
                     startY = lp.y
                     moved = false
-                    view.animate().alpha(0.88f).setDuration(90L).start()
-                    true
+                    v.alpha = 0.88f
+                    false
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - downX).toInt()
-                    val dy = (event.rawY - downY).toInt()
-                    if (abs(dx) > dp(4) || abs(dy) > dp(4)) {
-                        moved = true
-                    }
+                    val dx = (event.rawX - downRawX).roundToInt()
+                    val dy = (event.rawY - downRawY).roundToInt()
+                    if (kotlin.math.abs(dx) > dp(4) || kotlin.math.abs(dy) > dp(4)) moved = true
                     lp.x = startX + dx
                     lp.y = startY + dy
-                    safeUpdate(view, lp)
+                    safeUpdate(v, lp)
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    view.animate().alpha(0.98f).setDuration(120L).start()
-                    if (!moved) {
-                        compact = !compact
-                        applyCompactMode(view)
-                    } else {
-                        snapToNearestEdge(view, lp)
-                    }
-                    true
+                    v.alpha = 1f
+                    if (moved) {
+                        snapToEdge(v, lp)
+                        ConfigStore.savePosition(this, lp.x, lp.y)
+                        true
+                    } else false
                 }
                 else -> false
             }
         }
     }
 
-    private fun applyCompactMode(root: LinearLayout) {
-        if (compact) {
-            root.orientation = LinearLayout.HORIZONTAL
-            root.gravity = Gravity.CENTER
-            root.setPadding(dp(14), dp(8), dp(14), dp(8))
-            root.background = roundedBg(ONE_UI_CARD_COMPACT, 999f, 1, ONE_UI_STROKE, root)
-            topRow.visibility = View.GONE
-            hintView.visibility = View.GONE
-            latencyView.visibility = View.GONE
-            timeView.textSize = 19f
-        } else {
-            root.orientation = LinearLayout.VERTICAL
-            root.gravity = Gravity.CENTER
-            root.setPadding(dp(14), dp(11), dp(14), dp(11))
-            root.background = roundedBg(ONE_UI_CARD, 24f, 1, ONE_UI_STROKE, root)
-            topRow.visibility = View.VISIBLE
-            hintView.visibility = View.VISIBLE
-            latencyView.visibility = View.VISIBLE
-            timeView.textSize = 25f
-        }
-        root.post {
-            params?.let { lp -> safeUpdate(root, lp) }
-        }
-    }
-
-    private fun snapToNearestEdge(view: View, lp: WindowManager.LayoutParams) {
-        val metrics = resources.displayMetrics
+    private fun snapToEdge(view: View, lp: WindowManager.LayoutParams) {
+        val screenWidth = windowManager.defaultDisplayWidth()
+        val screenHeight = windowManager.defaultDisplayHeight()
+        val viewWidth = max(view.width, dp(120))
         val margin = dp(10)
-        val maxX = max(margin, metrics.widthPixels - view.width - margin)
-        val maxY = max(margin, metrics.heightPixels - view.height - dp(32))
-        val centerX = lp.x + view.width / 2
-        lp.x = if (centerX < metrics.widthPixels / 2) margin else maxX
-        lp.y = min(max(lp.y, margin), maxY)
+        lp.x = if (lp.x + viewWidth / 2 < screenWidth / 2) margin else screenWidth - viewWidth - margin
+        lp.y = lp.y.coerceIn(dp(40), screenHeight - dp(120))
         safeUpdate(view, lp)
     }
 
-    private fun safeUpdate(view: View, lp: WindowManager.LayoutParams) {
-        try {
-            windowManager.updateViewLayout(view, lp)
-        } catch (_: Exception) {
+    private fun showFloatingMenu() {
+        removeMenu()
+        val baseParams = floatingParams ?: return
+        val darkBg = alphaColor(Color.rgb(15, 23, 42), 94)
+        val menu = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            background = roundedBg(darkBg, 24f, 1, Color.argb(65, 255, 255, 255), this)
+            elevation = dp(14).toFloat()
         }
+        val title = TextView(this).apply {
+            text = "悬浮菜单"
+            textSize = 13f
+            setTextColor(Color.rgb(203, 213, 225))
+            bold()
+        }
+        menu.addView(title)
+        menu.addView(menuButton(if (compact) "完整模式" else "精简模式") {
+            compact = !compact
+            removeMenu()
+            showFloatingView()
+        })
+        menu.addView(menuButton(if (paused) "恢复刷新" else "暂停刷新") {
+            paused = !paused
+            removeMenu()
+            updateHint()
+        })
+        menu.addView(menuButton("隐藏悬浮窗") {
+            removeMenu()
+            removeFloatingView()
+        })
+        menu.addView(menuButton("停止运行") {
+            removeMenu()
+            removeFloatingView()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        })
+
+        val params = WindowManager.LayoutParams().apply {
+            width = dp(164)
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+            format = PixelFormat.TRANSLUCENT
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            gravity = Gravity.TOP or Gravity.START
+            x = baseParams.x
+            y = baseParams.y + dp(88)
+        }
+        menuView = menu
+        windowManager.addView(menu, params)
+    }
+
+    private fun menuButton(text: String, action: () -> Unit): Button = Button(this).apply {
+        this.text = text
+        isAllCaps = false
+        textSize = 14f
+        setTextColor(Color.WHITE)
+        background = roundedBg(Color.argb(38, 255, 255, 255), 14f, view = this)
+        setOnClickListener { action() }
+    }.also { button ->
+        button.setPadding(0, 0, 0, 0)
+        button.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)).apply { topMargin = dp(8) }
+    }
+
+    private fun removeFloatingView() {
+        clockJob?.cancel()
+        refreshJob?.cancel()
+        floatingView?.let {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+        }
+        floatingView = null
+        floatingParams = null
+    }
+
+    private fun removeMenu() {
+        menuView?.let {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+        }
+        menuView = null
+    }
+
+    private fun safeUpdate(view: View, lp: WindowManager.LayoutParams) {
+        try { windowManager.updateViewLayout(view, lp) } catch (_: Exception) {}
     }
 
     private fun startClockLoop() {
         clockJob?.cancel()
         clockJob = scope.launch {
             while (isActive) {
-                val text = if (stopwatchMode) {
-                    formatStopwatch(System.currentTimeMillis() - stopwatchStartMs)
-                } else {
-                    formatTime(System.currentTimeMillis() + offsetMs + serverOffsetMs)
-                }
-                timeView.text = text
+                if (::timeView.isInitialized) timeView.text = displayText()
+                updateHint()
                 delay(100L)
             }
         }
@@ -326,108 +398,117 @@ class FloatingService : Service() {
 
     private fun startRefreshLoop() {
         refreshJob?.cancel()
+        val current = cfg ?: return
+        if (!current.autoRefresh) return
         refreshJob = scope.launch {
             while (isActive) {
-                refreshLatency()
-                delay(refreshIntervalMs)
+                if (!paused) refreshLatency()
+                delay(current.refreshIntervalMs)
             }
         }
     }
 
     private suspend fun refreshLatency() {
-        val url = platformUrl
+        val url = cfg?.platformUrl
         if (url == null) {
             latestLatencyMs = 0L
             serverOffsetMs = 0L
-            updateLatencyUi(0L)
+            updateLatencyUi()
             return
         }
-
         val result = LatencyTester.test(url)
         latestLatencyMs = result.latencyMs
         serverOffsetMs = result.serverOffsetMs ?: 0L
-        updateLatencyUi(latestLatencyMs)
+        updateLatencyUi()
     }
 
-    private fun updateLatencyUi(value: Long) {
-        val color = latencyColor(value)
-        latencyView.text = latencyText(value)
-        latencyView.setTextColor(color)
-        latencyView.background = roundedBg(latencyPillBg(value), 999f, 1, latencyPillStroke(value), latencyView)
-        statusDot.background = roundedBg(color, 999f, view = statusDot)
+    private fun updateLatencyUi() {
+        if (!::latencyView.isInitialized) return
+        latencyView.text = latencyText(latestLatencyMs)
+        latencyView.setTextColor(latencyColor(latestLatencyMs))
+        if (::statusDot.isInitialized) statusDot.background = roundedBg(latencyColor(latestLatencyMs), 999f, view = statusDot)
+    }
+
+    private fun updateHint() {
+        if (!::hintView.isInitialized) return
+        val text = when {
+            paused -> "已暂停刷新 · 长按菜单可恢复"
+            cfg?.mode == ConfigStore.MODE_COUNTDOWN -> "倒计时模式 · 长按菜单可关闭"
+            else -> "单击精简 · 长按菜单 · 通知栏可关闭"
+        }
+        hintView.text = text
+    }
+
+    private fun displayText(): String {
+        val current = cfg ?: return "--:--:--.-"
+        return if (current.mode == ConfigStore.MODE_COUNTDOWN) {
+            val remain = max(0L, countdownEndAtMs - System.currentTimeMillis() + current.offsetMs)
+            if (remain == 0L) {
+                if (::timeView.isInitialized) timeView.setTextColor(Color.rgb(248, 113, 113))
+            }
+            formatCountdown(remain)
+        } else {
+            val time = System.currentTimeMillis() + current.offsetMs + serverOffsetMs
+            SimpleDateFormat("HH:mm:ss.S", Locale.getDefault()).format(Date(time))
+        }
+    }
+
+    private fun formatCountdown(ms: Long): String {
+        val tenths = ms / 100L
+        val minutes = tenths / 600L
+        val seconds = (tenths / 10L) % 60L
+        val tenth = tenths % 10L
+        return String.format(Locale.getDefault(), "%02d:%02d.%d", minutes, seconds, tenth)
+    }
+
+    private fun sizeScale(): Float = when (cfg?.size) {
+        ConfigStore.SIZE_SMALL -> 0.86f
+        ConfigStore.SIZE_LARGE -> 1.14f
+        else -> 1.0f
     }
 
     private fun buildNotification(): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val showIntent = PendingIntent.getService(this, 1, Intent(this, FloatingService::class.java).apply { action = ACTION_SHOW }, pendingFlags())
+        val hideIntent = PendingIntent.getService(this, 2, Intent(this, FloatingService::class.java).apply { action = ACTION_HIDE }, pendingFlags())
+        val stopIntent = PendingIntent.getService(this, 3, Intent(this, FloatingService::class.java).apply { action = ACTION_STOP }, pendingFlags())
+        val pauseIntent = PendingIntent.getService(this, 4, Intent(this, FloatingService::class.java).apply { action = ACTION_PAUSE_REFRESH }, pendingFlags())
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
-        return builder
-            .setContentTitle("悬浮秒表运行中")
-            .setContentText("Floatwatch One UI HUD 已开启")
             .setSmallIcon(android.R.drawable.ic_menu_recent_history)
+            .setContentTitle("Floatwatch 正在运行")
+            .setContentText("通知栏可显示、隐藏、暂停或停止悬浮窗")
             .setOngoing(true)
+            .addAction(android.R.drawable.ic_menu_view, "显示", showIntent)
+            .addAction(android.R.drawable.ic_media_pause, "暂停", pauseIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止", stopIntent)
+            .addAction(android.R.drawable.ic_menu_upload, "隐藏", hideIntent)
             .build()
     }
 
-    private fun createNotificationChannel() {
+    private fun pendingFlags(): Int {
+        return PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+    }
+
+    private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(CHANNEL_ID, "Floatwatch", NotificationManager.IMPORTANCE_LOW)
             val manager = getSystemService(NotificationManager::class.java)
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Floatwatch Overlay",
-                NotificationManager.IMPORTANCE_LOW
-            )
             manager.createNotificationChannel(channel)
         }
     }
 
-    private fun latencyText(value: Long): String {
-        return when {
-            value < 0L -> "失败"
-            else -> "$value ms"
-        }
+    private fun WindowManager.defaultDisplayWidth(): Int {
+        return resources.displayMetrics.widthPixels
     }
 
-    private fun latencyColor(value: Long): Int {
-        return when {
-            value < 0L -> ONE_UI_GRAY
-            value <= 80L -> ONE_UI_GREEN
-            value <= 150L -> ONE_UI_ORANGE
-            else -> ONE_UI_RED
-        }
+    private fun WindowManager.defaultDisplayHeight(): Int {
+        return resources.displayMetrics.heightPixels
     }
 
-    private fun latencyPillBg(value: Long): Int {
-        return when {
-            value < 0L -> 0x26334455
-            value <= 80L -> 0x244ADE80
-            value <= 150L -> 0x26FBBF24
-            else -> 0x26F87171
-        }
-    }
-
-    private fun latencyPillStroke(value: Long): Int {
-        return when {
-            value < 0L -> 0x40334455
-            value <= 80L -> 0x444ADE80
-            value <= 150L -> 0x44FBBF24
-            else -> 0x44F87171
-        }
-    }
-
-    private fun formatTime(millis: Long): String {
-        return SimpleDateFormat("HH:mm:ss.S", Locale.CHINA).format(Date(millis))
-    }
-
-    private fun formatStopwatch(elapsedMs: Long): String {
-        val minutes = elapsedMs / 60000
-        val seconds = (elapsedMs % 60000) / 1000
-        val millis = elapsedMs % 1000
-        return String.format(Locale.US, "%02d:%02d.%03d", minutes, seconds, millis)
-    }
-
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 }

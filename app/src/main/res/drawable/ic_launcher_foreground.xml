@@ -1,9 +1,61 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- soft floating glow -->
+    <path
+        android:fillColor="#33FFFFFF"
+        android:pathData="M24,74 C34,64 74,64 84,74 C78,87 30,87 24,74 Z" />
+
+    <!-- outer watch body -->
+    <path
+        android:fillColor="#F8FAFC"
+        android:pathData="M54,22 C35,22 20,37 20,56 C20,75 35,90 54,90 C73,90 88,75 88,56 C88,37 73,22 54,22 Z" />
+
+    <!-- colored rim shadow -->
+    <path
+        android:fillColor="#334F8CFF"
+        android:pathData="M54,28 C39,28 27,40 27,56 C27,72 39,84 54,84 C70,84 82,72 82,56 C82,40 70,28 54,28 Z" />
+
+    <!-- inner dial -->
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M54,32 C41,32 31,43 31,56 C31,70 41,80 54,80 C68,80 78,70 78,56 C78,43 68,32 54,32 Z" />
+
+    <!-- highlight arc -->
+    <path
+        android:strokeColor="#64F4D7"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M39,43 C45,36 57,34 66,39" />
+
+    <!-- second hand -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M54,56 L54,41" />
+    <path
+        android:strokeColor="#4ADE80"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M54,56 L67,63" />
+
+    <!-- center dot -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M15,1H9v2h6V1zM11,14h2V8h-2v6zM19.03,7.39l1.42,-1.42c-0.43,-0.51 -0.9,-0.99 -1.41,-1.41l-1.42,1.42C16.07,4.74 14.12,4 12,4c-4.97,0 -9,4.03 -9,9s4.03,9 9,9 9,-4.03 9,-9c0,-2.12 -0.74,-4.07 -1.97,-5.61zM12,20c-3.86,0 -7,-3.14 -7,-7s3.14,-7 7,-7 7,3.14 7,7 -3.14,7 -7,7z" />
+        android:pathData="M54,52 m-4,0 a4,4 0,1 0,8 0 a4,4 0,1 0,-8 0" />
+
+    <!-- sync dot -->
+    <path
+        android:fillColor="#FACC15"
+        android:pathData="M78,27 m-7,0 a7,7 0,1 0,14 0 a7,7 0,1 0,-14 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M78,30 m-3,0 a3,3 0,1 0,6 0 a3,3 0,1 0,-6 0" />
 </vector>
