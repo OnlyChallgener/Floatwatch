@@ -1,11 +1,19 @@
-# Floatwatch V2.4 Stable Latency
+# Floatwatch V2.5 抢购精准引擎
 
-本版重点：不乱动 UI，仅修复用户指出的问题并优化延迟稳定性。
-
-更新：
-- 悬浮窗中「系统时间」显示为「系统」，其他平台名称不改短。
-- 倒计时模式完整悬浮卡片改为和时钟模式完整卡片同一尺寸、同一字号。
-- 首页平台卡片高度和 ms 行高加大，避免 ms 被裁切。
-- 预设时间/模式胶囊增加底部空间，减少阴影被裁切导致的底部压平感。
-- 延迟算法升级：HTTP HEAD 短突发采样、去高峰值、稳定低中位数、EMA 平滑、单次大尖峰过滤。
-- 切换平台时重置该平台延迟平滑状态，避免旧平台延迟污染新平台。
+更新重点：
+- 顶部大卡片右下角增加纯刷新按钮，手动刷新全部平台延迟并触发一次时间校准。
+- 所有平台延迟持续自动刷新，不再只刷新当前选中平台。
+- 平台延迟每个平台独立请求序号和独立平滑状态，避免旧请求覆盖新结果、避免平台之间互相污染。
+- 时间显示改为 TimeKeeper：NTP 校准 + elapsedRealtime 推进。NTP 失败时自动回退系统时间。
+- 主页卡片压回紧凑高度，靠固定 ms 行高和 padding 修复裁切，不再盲目加高。
+- 平台圆字改成可替换图片图标，文件在 app/src/main/res/drawable-nodpi/：
+  - ic_platform_system.png
+  - ic_platform_jd.png
+  - ic_platform_taobao.png
+  - ic_platform_pdd.png
+  - ic_platform_huawei.png
+  - ic_platform_xiaomi.png
+  - ic_platform_douyin.png
+  - ic_platform_wechat.png
+  - ic_platform_amazon.png
+  你可以用同名 PNG 覆盖这些文件再 push，代码不用改。

@@ -68,6 +68,7 @@ class LatencyTester {
                 .url(url)
                 .head()
                 .header("User-Agent", "Floatwatch/1.0")
+                .header("Cache-Control", "no-cache")
                 .build()
 
             val start = System.currentTimeMillis()

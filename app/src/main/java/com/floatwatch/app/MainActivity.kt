@@ -20,6 +20,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.GridLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -67,6 +68,8 @@ class MainActivity : Activity() {
     private val cardViews = mutableMapOf<String, LinearLayout>()
     private val cardLatencyViews = mutableMapOf<String, TextView>()
     private val cardTimeViews = mutableMapOf<String, TextView>()
+    private val platformLatencyMs = mutableMapOf<String, Long>()
+    private val platformRequestIds = mutableMapOf<String, Int>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,6 +77,10 @@ class MainActivity : Activity() {
         requestNotificationPermissionIfNeeded()
         buildUi()
         startClockLoop()
+        scope.launch {
+            TimeKeeper.syncBest()
+            updateStatusTimeOnly()
+        }
         startRefreshLoop()
     }
 
@@ -95,6 +102,7 @@ class MainActivity : Activity() {
         floatingSize = cfg.size
         floatingTheme = cfg.theme
         latestLatencyMs = if (selectedPlatform.url == null) 0L else -1L
+        platformLatencyMs["系统时间"] = 0L
     }
 
     private fun buildUi() {
@@ -148,8 +156,26 @@ class MainActivity : Activity() {
             includeFontPadding = false
             bold()
         }
+        val refreshButton = TextView(this).apply {
+            text = "↻"
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(34, 197, 94))
+            bold()
+            background = roundedBg(Color.rgb(240, 253, 244), 999f, 1, Color.rgb(187, 247, 208), this)
+            setOnClickListener {
+                scope.launch { TimeKeeper.syncBest(); updateStatusTimeOnly() }
+                refreshAllPlatformsOnce(manual = true)
+            }
+        }
+        val timeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+        }
+        timeRow.addView(statusTime, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        timeRow.addView(refreshButton, LinearLayout.LayoutParams(dp(34), dp(34)).apply { leftMargin = dp(8); bottomMargin = dp(1) })
         statusCard.addView(statusRow)
-        statusCard.addView(statusTime, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+        statusCard.addView(timeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
         root.addView(statusCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         grid = GridLayout(this).apply { columnCount = 3 }
@@ -196,27 +222,23 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(9), dp(11), dp(9), dp(18))
+            setPadding(dp(8), dp(10), dp(8), dp(10))
             background = roundedBg(Color.WHITE, 18f, view = this)
             elevation = 1.0f * resources.displayMetrics.density
             setOnClickListener {
                 selectedPlatform = platform
-                latestLatencyMs = if (platform.url == null) 0L else -1L
+                latestLatencyMs = platformLatencyMs[platform.name] ?: if (platform.url == null) 0L else -1L
                 serverOffsetMs = 0L
-                LatencyStabilizer.reset(platform.name)
                 ConfigStore.savePlatform(this@MainActivity, platform)
                 updateSelectedCards()
                 updateStatus()
-                startRefreshLoop()
+                refreshPlatform(platform, manual = true)
             }
         }
-        val icon = TextView(this).apply {
-            text = platform.shortName
-            textSize = 13.4f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            bold()
-            background = roundedBg(platform.color, 999f, view = this)
+        val icon = ImageView(this).apply {
+            setImageResource(platform.iconRes)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            contentDescription = platform.name
         }
         val name = TextView(this).apply {
             text = platform.name
@@ -242,15 +264,15 @@ class MainActivity : Activity() {
         }
         cardTimeViews[platform.name] = time
         cardLatencyViews[platform.name] = latency
-        card.addView(icon, LinearLayout.LayoutParams(dp(38), dp(38)))
-        card.addView(name, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
-        card.addView(time, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(5) })
-        card.addView(latency, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)).apply { topMargin = dp(3) })
+        card.addView(icon, LinearLayout.LayoutParams(dp(36), dp(36)))
+        card.addView(name, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+        card.addView(time, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(3) })
+        card.addView(latency, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(22)).apply { topMargin = dp(2) })
 
         val cardWidth = ((resources.displayMetrics.widthPixels - dp(56)) / 3f).roundToInt()
         card.layoutParams = GridLayout.LayoutParams().apply {
             width = cardWidth
-            height = dp(154)
+            height = dp(138)
             setMargins(dp(3), dp(5), dp(3), dp(5))
         }
         return card
@@ -647,17 +669,36 @@ private fun addCompactOffsetSection(root: LinearLayout) {
     }
 
     private fun refreshSelectedOnce() {
-        val url = selectedPlatform.url
+        refreshPlatform(selectedPlatform, manual = true)
+    }
+
+    private fun refreshAllPlatformsOnce(manual: Boolean = false) {
+        Platforms.items.forEach { refreshPlatform(it, manual = manual) }
+    }
+
+    private fun refreshPlatform(platform: Platform, manual: Boolean = false) {
+        val url = platform.url
         if (url == null) {
-            latestLatencyMs = 0L
-            serverOffsetMs = 0L
-            updateStatus()
+            applyPlatformLatency(platform, 0L)
             return
         }
+        val nextId = (platformRequestIds[platform.name] ?: 0) + 1
+        platformRequestIds[platform.name] = nextId
         scope.launch {
-            val result = LatencyTester.stableTest(url)
-            latestLatencyMs = LatencyStabilizer.update(selectedPlatform.name, result.latencyMs)
-            serverOffsetMs = result.serverOffsetMs ?: 0L
+            val result = LatencyTester.stableTest(url, repeats = if (manual) 5 else 3)
+            if (platformRequestIds[platform.name] != nextId) return@launch
+            val stable = LatencyStabilizer.update(platform.name, result.latencyMs)
+            applyPlatformLatency(platform, stable)
+        }
+    }
+
+    private fun applyPlatformLatency(platform: Platform, value: Long) {
+        platformLatencyMs[platform.name] = value
+        cardLatencyViews[platform.name]?.text = latencyText(value)
+        cardLatencyViews[platform.name]?.setTextColor(latencyColor(value))
+        if (platform.name == selectedPlatform.name) {
+            latestLatencyMs = value
+            serverOffsetMs = 0L
             updateStatus()
         }
     }
@@ -669,7 +710,7 @@ private fun addCompactOffsetSection(root: LinearLayout) {
         if (!autoRefresh) return
         refreshJob = scope.launch {
             while (isActive) {
-                refreshSelectedOnce()
+                refreshAllPlatformsOnce(manual = false)
                 delay(refreshIntervalMs)
             }
         }
@@ -692,6 +733,7 @@ private fun addCompactOffsetSection(root: LinearLayout) {
 
     private fun updateStatus() {
         if (!::statusSource.isInitialized) return
+        latestLatencyMs = platformLatencyMs[selectedPlatform.name] ?: if (selectedPlatform.url == null) 0L else latestLatencyMs
         statusSource.text = selectedPlatform.name
         statusMode.text = if (mode == ConfigStore.MODE_COUNTDOWN) "倒计时" else "时钟"
         statusLatency.text = latencyText(latestLatencyMs)
@@ -706,7 +748,7 @@ private fun addCompactOffsetSection(root: LinearLayout) {
     }
 
     private fun currentClockText(): String {
-        val time = System.currentTimeMillis() + offsetMs + serverOffsetMs
+        val time = TimeKeeper.now() + offsetMs
         return SimpleDateFormat("HH:mm:ss.S", Locale.getDefault()).format(Date(time))
     }
 
@@ -728,14 +770,13 @@ private fun addCompactOffsetSection(root: LinearLayout) {
                 val parser = SimpleDateFormat(pattern, Locale.getDefault()).apply { isLenient = false }
                 val parsed = parser.parse(trimmed) ?: continue
                 val source = java.util.Calendar.getInstance().apply { time = parsed }
-                val now = java.util.Calendar.getInstance()
                 val target = java.util.Calendar.getInstance().apply {
                     set(java.util.Calendar.HOUR_OF_DAY, source.get(java.util.Calendar.HOUR_OF_DAY))
                     set(java.util.Calendar.MINUTE, source.get(java.util.Calendar.MINUTE))
                     set(java.util.Calendar.SECOND, source.get(java.util.Calendar.SECOND))
                     set(java.util.Calendar.MILLISECOND, source.get(java.util.Calendar.MILLISECOND))
                 }
-                if (target.timeInMillis <= now.timeInMillis) return null
+                if (target.timeInMillis <= TimeKeeper.now()) return null
                 return target.timeInMillis
             } catch (_: Exception) {}
         }

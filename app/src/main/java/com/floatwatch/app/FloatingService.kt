@@ -161,6 +161,7 @@ class FloatingService : Service() {
         makeDraggable(view, params)
         startClockLoop()
         startRefreshLoop()
+        scope.launch { TimeKeeper.syncBest() }
     }
 
     
@@ -443,7 +444,7 @@ private fun buildCompactView(): LinearLayout {
         }
         val result = LatencyTester.stableTest(url)
         latestLatencyMs = LatencyStabilizer.update(cfg?.platformName ?: "default", result.latencyMs)
-        serverOffsetMs = result.serverOffsetMs ?: 0L
+        serverOffsetMs = 0L
         updateLatencyUi()
     }
 
@@ -459,13 +460,13 @@ private fun buildCompactView(): LinearLayout {
     private fun displayText(): String {
         val current = cfg ?: return "--:--:--.-"
         return if (current.mode == ConfigStore.MODE_COUNTDOWN) {
-            val remain = max(0L, countdownEndAtMs - (System.currentTimeMillis() + current.offsetMs + serverOffsetMs))
+            val remain = max(0L, countdownEndAtMs - (TimeKeeper.now() + current.offsetMs))
             if (remain == 0L) {
                 if (::timeView.isInitialized) timeView.setTextColor(Color.rgb(248, 113, 113))
             }
             formatCountdown(remain)
         } else {
-            val time = System.currentTimeMillis() + current.offsetMs + serverOffsetMs
+            val time = TimeKeeper.now() + current.offsetMs
             SimpleDateFormat("HH:mm:ss.S", Locale.getDefault()).format(Date(time))
         }
     }
@@ -480,7 +481,7 @@ private fun buildCompactView(): LinearLayout {
 
     private fun resolveCountdownEndAt(targetText: String, durationMs: Long): Long {
         val trimmed = targetText.trim()
-        if (trimmed.isBlank()) return System.currentTimeMillis() + durationMs
+        if (trimmed.isBlank()) return TimeKeeper.now() + durationMs
 
         val patterns = listOf("HH:mm:ss.S", "HH:mm:ss", "HH:mm")
         for (pattern in patterns) {
@@ -494,12 +495,12 @@ private fun buildCompactView(): LinearLayout {
                     set(Calendar.SECOND, source.get(Calendar.SECOND))
                     set(Calendar.MILLISECOND, source.get(Calendar.MILLISECOND))
                 }
-                if (target.timeInMillis <= System.currentTimeMillis()) target.add(Calendar.DAY_OF_YEAR, 1)
+                if (target.timeInMillis <= TimeKeeper.now()) target.add(Calendar.DAY_OF_YEAR, 1)
                 return target.timeInMillis
             } catch (_: Exception) {
             }
         }
-        return System.currentTimeMillis() + durationMs
+        return TimeKeeper.now() + durationMs
     }
 
     private fun displayPlatformName(name: String?): String {
