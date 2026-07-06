@@ -13,6 +13,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -27,6 +28,9 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 class FloatingService : Service() {
     companion object {
@@ -38,6 +42,16 @@ class FloatingService : Service() {
 
         private const val CHANNEL_ID = "floatwatch_overlay"
         private const val NOTIFICATION_ID = 10086
+
+        private const val ONE_UI_CARD = 0xF21D212B.toInt()
+        private const val ONE_UI_CARD_COMPACT = 0xF2222632.toInt()
+        private const val ONE_UI_TEXT = 0xFFFFFFFF.toInt()
+        private const val ONE_UI_MUTED = 0xFFB8C0CC.toInt()
+        private const val ONE_UI_STROKE = 0x22FFFFFF
+        private const val ONE_UI_GREEN = 0xFF4ADE80.toInt()
+        private const val ONE_UI_ORANGE = 0xFFFBBF24.toInt()
+        private const val ONE_UI_RED = 0xFFF87171.toInt()
+        private const val ONE_UI_GRAY = 0xFFCBD5E1.toInt()
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -48,9 +62,12 @@ class FloatingService : Service() {
     private var overlayView: LinearLayout? = null
     private var params: WindowManager.LayoutParams? = null
 
+    private lateinit var topRow: LinearLayout
+    private lateinit var statusDot: View
     private lateinit var titleView: TextView
     private lateinit var timeView: TextView
     private lateinit var latencyView: TextView
+    private lateinit var hintView: TextView
 
     private var platformName = "系统时间"
     private var platformUrl: String? = null
@@ -98,37 +115,76 @@ class FloatingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun addOverlay() {
-        val view = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(dp(14), dp(10), dp(14), dp(10))
-            background = roundedBg(0xDD111827.toInt(), 16f, view = this)
+            setPadding(dp(14), dp(11), dp(14), dp(11))
+            background = roundedBg(ONE_UI_CARD, 24f, 1, ONE_UI_STROKE, this)
+            elevation = dp(14).toFloat()
+            alpha = 0.98f
+        }
+
+        topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        statusDot = View(this).apply {
+            background = roundedBg(ONE_UI_GREEN, 999f, view = this)
         }
 
         titleView = TextView(this).apply {
             text = platformName
-            textSize = 12f
-            setTextColor(0xFFE5E7EB.toInt())
-            gravity = Gravity.CENTER
-        }
-        timeView = TextView(this).apply {
-            text = "--:--:--.-"
-            textSize = 23f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
+            textSize = 12.5f
+            setTextColor(ONE_UI_MUTED)
             includeFontPadding = false
+            maxLines = 1
             bold()
         }
+
         latencyView = TextView(this).apply {
             text = if (platformUrl == null) "0 ms" else "-- ms"
-            textSize = 12f
-            setTextColor(0xFF86EFAC.toInt())
+            textSize = 11.5f
+            setTextColor(ONE_UI_GREEN)
             gravity = Gravity.CENTER
+            includeFontPadding = false
+            setPadding(dp(9), dp(4), dp(9), dp(4))
+            background = roundedBg(0x1F4ADE80, 999f, 1, 0x334ADE80, this)
+            bold()
         }
 
-        view.addView(titleView)
-        view.addView(timeView)
-        view.addView(latencyView)
+        topRow.addView(statusDot, LinearLayout.LayoutParams(dp(7), dp(7)))
+        topRow.addView(titleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            leftMargin = dp(7)
+            rightMargin = dp(10)
+        })
+        topRow.addView(latencyView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(24)))
+
+        timeView = TextView(this).apply {
+            text = "--:--:--.-"
+            textSize = 25f
+            setTextColor(ONE_UI_TEXT)
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            letterSpacing = 0.02f
+            bold()
+        }
+
+        hintView = TextView(this).apply {
+            text = if (stopwatchMode) "秒表 · 单击收起 · 拖动移动" else "时间校准 · 单击收起 · 拖动移动"
+            textSize = 10.5f
+            setTextColor(0x99FFFFFF.toInt())
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+        }
+
+        root.addView(topRow, LinearLayout.LayoutParams(dp(180), ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(timeView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(7)
+        })
+        root.addView(hintView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(7)
+        })
 
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -141,8 +197,7 @@ class FloatingService : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -150,10 +205,10 @@ class FloatingService : Service() {
             y = dp(120)
         }
 
-        attachDragAndClick(view, lp)
-        overlayView = view
+        attachDragAndClick(root, lp)
+        overlayView = root
         params = lp
-        windowManager.addView(view, lp)
+        windowManager.addView(root, lp)
     }
 
     private fun removeOverlay() {
@@ -167,7 +222,7 @@ class FloatingService : Service() {
         params = null
     }
 
-    private fun attachDragAndClick(view: View, lp: WindowManager.LayoutParams) {
+    private fun attachDragAndClick(view: LinearLayout, lp: WindowManager.LayoutParams) {
         var downX = 0f
         var downY = 0f
         var startX = 0
@@ -182,26 +237,27 @@ class FloatingService : Service() {
                     startX = lp.x
                     startY = lp.y
                     moved = false
+                    view.animate().alpha(0.88f).setDuration(90L).start()
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - downX).toInt()
                     val dy = (event.rawY - downY).toInt()
-                    if (kotlin.math.abs(dx) > dp(4) || kotlin.math.abs(dy) > dp(4)) {
+                    if (abs(dx) > dp(4) || abs(dy) > dp(4)) {
                         moved = true
                     }
                     lp.x = startX + dx
                     lp.y = startY + dy
-                    try {
-                        windowManager.updateViewLayout(view, lp)
-                    } catch (_: Exception) {
-                    }
+                    safeUpdate(view, lp)
                     true
                 }
-                MotionEvent.ACTION_UP -> {
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    view.animate().alpha(0.98f).setDuration(120L).start()
                     if (!moved) {
                         compact = !compact
-                        applyCompactMode()
+                        applyCompactMode(view)
+                    } else {
+                        snapToNearestEdge(view, lp)
                     }
                     true
                 }
@@ -210,10 +266,47 @@ class FloatingService : Service() {
         }
     }
 
-    private fun applyCompactMode() {
-        titleView.visibility = if (compact) View.GONE else View.VISIBLE
-        latencyView.visibility = if (compact) View.GONE else View.VISIBLE
-        timeView.textSize = if (compact) 20f else 23f
+    private fun applyCompactMode(root: LinearLayout) {
+        if (compact) {
+            root.orientation = LinearLayout.HORIZONTAL
+            root.gravity = Gravity.CENTER
+            root.setPadding(dp(14), dp(8), dp(14), dp(8))
+            root.background = roundedBg(ONE_UI_CARD_COMPACT, 999f, 1, ONE_UI_STROKE, root)
+            topRow.visibility = View.GONE
+            hintView.visibility = View.GONE
+            latencyView.visibility = View.GONE
+            timeView.textSize = 19f
+        } else {
+            root.orientation = LinearLayout.VERTICAL
+            root.gravity = Gravity.CENTER
+            root.setPadding(dp(14), dp(11), dp(14), dp(11))
+            root.background = roundedBg(ONE_UI_CARD, 24f, 1, ONE_UI_STROKE, root)
+            topRow.visibility = View.VISIBLE
+            hintView.visibility = View.VISIBLE
+            latencyView.visibility = View.VISIBLE
+            timeView.textSize = 25f
+        }
+        root.post {
+            params?.let { lp -> safeUpdate(root, lp) }
+        }
+    }
+
+    private fun snapToNearestEdge(view: View, lp: WindowManager.LayoutParams) {
+        val metrics = resources.displayMetrics
+        val margin = dp(10)
+        val maxX = max(margin, metrics.widthPixels - view.width - margin)
+        val maxY = max(margin, metrics.heightPixels - view.height - dp(32))
+        val centerX = lp.x + view.width / 2
+        lp.x = if (centerX < metrics.widthPixels / 2) margin else maxX
+        lp.y = min(max(lp.y, margin), maxY)
+        safeUpdate(view, lp)
+    }
+
+    private fun safeUpdate(view: View, lp: WindowManager.LayoutParams) {
+        try {
+            windowManager.updateViewLayout(view, lp)
+        } catch (_: Exception) {
+        }
     }
 
     private fun startClockLoop() {
@@ -246,16 +339,22 @@ class FloatingService : Service() {
         if (url == null) {
             latestLatencyMs = 0L
             serverOffsetMs = 0L
-            latencyView.text = "0 ms"
-            latencyView.setTextColor(0xFF86EFAC.toInt())
+            updateLatencyUi(0L)
             return
         }
 
         val result = LatencyTester.test(url)
         latestLatencyMs = result.latencyMs
         serverOffsetMs = result.serverOffsetMs ?: 0L
-        latencyView.text = latencyText(latestLatencyMs)
-        latencyView.setTextColor(latencyColor(latestLatencyMs))
+        updateLatencyUi(latestLatencyMs)
+    }
+
+    private fun updateLatencyUi(value: Long) {
+        val color = latencyColor(value)
+        latencyView.text = latencyText(value)
+        latencyView.setTextColor(color)
+        latencyView.background = roundedBg(latencyPillBg(value), 999f, 1, latencyPillStroke(value), latencyView)
+        statusDot.background = roundedBg(color, 999f, view = statusDot)
     }
 
     private fun buildNotification(): Notification {
@@ -267,7 +366,7 @@ class FloatingService : Service() {
         }
         return builder
             .setContentTitle("悬浮秒表运行中")
-            .setContentText("点击 App 可关闭或重新开启悬浮窗")
+            .setContentText("Floatwatch One UI HUD 已开启")
             .setSmallIcon(android.R.drawable.ic_menu_recent_history)
             .setOngoing(true)
             .build()
@@ -294,10 +393,28 @@ class FloatingService : Service() {
 
     private fun latencyColor(value: Long): Int {
         return when {
-            value < 0L -> 0xFFD1D5DB.toInt()
-            value <= 80L -> 0xFF86EFAC.toInt()
-            value <= 150L -> 0xFFFBBF24.toInt()
-            else -> 0xFFF87171.toInt()
+            value < 0L -> ONE_UI_GRAY
+            value <= 80L -> ONE_UI_GREEN
+            value <= 150L -> ONE_UI_ORANGE
+            else -> ONE_UI_RED
+        }
+    }
+
+    private fun latencyPillBg(value: Long): Int {
+        return when {
+            value < 0L -> 0x26334455
+            value <= 80L -> 0x244ADE80
+            value <= 150L -> 0x26FBBF24
+            else -> 0x26F87171
+        }
+    }
+
+    private fun latencyPillStroke(value: Long): Int {
+        return when {
+            value < 0L -> 0x40334455
+            value <= 80L -> 0x444ADE80
+            value <= 150L -> 0x44FBBF24
+            else -> 0x44F87171
         }
     }
 
