@@ -19,8 +19,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      GRADLE_VERSION: "9.5.1"
-      APP_NAME: "Floatwatch"
+      GRADLE_VERSION: "8.9"
 
     steps:
       - name: Checkout source
@@ -33,78 +32,81 @@ jobs:
           java-version: "17"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null || true
 
       - name: Install Android SDK packages
-        run: |
-          sdkmanager "platforms;android-35" "build-tools;36.0.0"
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Setup Gradle 9.5.1
-        uses: gradle/actions/setup-gradle@v6
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.5.1"
-          cache-provider: basic
+          gradle-version: "8.9"
+
+      - name: Check signing secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then echo "Missing secret: KEYSTORE_BASE64"; exit 1; fi
+          if [ -z "$KEYSTORE_PASSWORD" ]; then echo "Missing secret: KEYSTORE_PASSWORD"; exit 1; fi
+          if [ -z "$KEY_ALIAS" ]; then echo "Missing secret: KEY_ALIAS"; exit 1; fi
+          if [ -z "$KEY_PASSWORD" ]; then echo "Missing secret: KEY_PASSWORD"; exit 1; fi
 
       - name: Restore signing files
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "$GITHUB_WORKSPACE/floatwatch-release.jks"
-
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/floatwatch-release.jks"
           cat > "$GITHUB_WORKSPACE/keystore.properties" <<EOF
           storeFile=$GITHUB_WORKSPACE/floatwatch-release.jks
-          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-          keyAlias=${{ secrets.KEY_ALIAS }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
           EOF
 
       - name: Generate version
         run: |
           VERSION_CODE=${{ github.run_number }}
           VERSION_NAME="1.0.${VERSION_CODE}"
-
           echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
           echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          sed -i "s/versionCode = .*/versionCode = $VERSION_CODE/" app/build.gradle.kts
+          sed -i "s/versionName = .*/versionName = \"$VERSION_NAME\"/" app/build.gradle.kts
 
-          if [ -f app/build.gradle.kts ]; then
-            sed -i "s/versionCode = .*/versionCode = $VERSION_CODE/" app/build.gradle.kts
-            sed -i "s/versionName = .*/versionName = \"$VERSION_NAME\"/" app/build.gradle.kts
-          fi
-
-          if [ -f app/build.gradle ]; then
-            sed -i "s/versionCode .*/versionCode $VERSION_CODE/" app/build.gradle
-            sed -i "s/versionName .*/versionName \"$VERSION_NAME\"/" app/build.gradle
-          fi
+      - name: Show Gradle version
+        run: gradle --version
 
       - name: Build release APK
-        run: |
-          gradle :app:assembleRelease --no-daemon --stacktrace
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
 
       - name: Find and rename APK
         run: |
           mkdir -p output
-
           APK_PATH="$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)"
-
           if [ -z "$APK_PATH" ]; then
             echo "No APK found"
             exit 1
           fi
-
-          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
-
           cp "$APK_PATH" "output/Floatwatch-${VERSION_NAME}.apk"
 
       - name: Verify APK signature
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
-
           if [ -z "$APKSIGNER" ]; then
             echo "apksigner not found"
             exit 1
           fi
-
           "$APKSIGNER" verify --verbose "output/Floatwatch-${VERSION_NAME}.apk"
 
-      - name: Upload artifact
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Floatwatch-${{ env.VERSION_NAME }}-apk

@@ -3,479 +3,404 @@ package com.floatwatch.app
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Color
-import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
-import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : Activity() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val tester = LatencyTester()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var refreshJob: Job? = null
 
-    private val cardHolders = mutableMapOf<String, CardHolder>()
-    private val latencyMap = mutableMapOf<String, Long>()
-    private val baseMap = mutableMapOf<String, Pair<Long, Long>>()
+    private var selectedPlatform: Platform = Platforms.items.first()
+    private var offsetMs: Long = 0L
+    private var serverOffsetMs: Long = 0L
+    private var latestLatencyMs: Long = 0L
+    private var refreshIntervalMs: Long = 5000L
+    private var stopwatchMode = false
 
-    private lateinit var statusText: TextView
-    private lateinit var offsetText: TextView
-    private lateinit var startButton: Button
-    private var floatingStarted = false
-    private var activityStopwatchStartMs = SystemClock.elapsedRealtime()
+    private lateinit var statusSource: TextView
+    private lateinit var statusTime: TextView
+    private lateinit var statusLatency: TextView
+    private lateinit var grid: GridLayout
+    private val cardViews = mutableMapOf<String, LinearLayout>()
+    private val cardLatencyViews = mutableMapOf<String, TextView>()
+    private val cardTimeViews = mutableMapOf<String, TextView>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ensureDefaultPrefs()
-        requestNotificationPermissionIfNeed()
-        setContentView(buildContentView())
-        refreshSelectedStyle()
-        startTickerLoop()
-        startLatencyLoop()
+        requestNotificationPermissionIfNeeded()
+        buildUi()
+        startClockLoop()
+        startRefreshLoop()
     }
 
     override fun onDestroy() {
-        scope.cancel()
         super.onDestroy()
+        scope.cancel()
     }
 
-    private fun ensureDefaultPrefs() {
-        val prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-        if (!prefs.contains(KEY_SOURCE_ID)) {
-            prefs.edit()
-                .putString(KEY_SOURCE_ID, "system")
-                .putString(KEY_MODE, MODE_CLOCK)
-                .putLong(KEY_OFFSET_MS, 0L)
-                .putLong(KEY_REFRESH_MS, DEFAULT_REFRESH_MS)
-                .putBoolean(KEY_SHOW_PLATFORM, true)
-                .apply()
-        }
-    }
+    private fun buildUi() {
+        val density = resources.displayMetrics.density
 
-    private fun buildContentView(): View {
-        val frame = FrameLayout(this).apply {
-            setBackgroundColor(Color.rgb(247, 248, 250))
-        }
-
-        val scroll = ScrollView(this).apply { isFillViewport = false }
-        val content = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(18), dp(14), dp(132))
+            setPadding(dp(16), dp(14), dp(16), dp(16))
+            setBackgroundColor(Color.rgb(246, 247, 249))
         }
-        scroll.addView(content)
 
-        content.addView(buildTopControls())
-        content.addView(buildStatusCard())
-        content.addView(buildSourceGrid())
-        content.addView(buildTips())
-
-        frame.addView(scroll, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT,
-        ))
-        frame.addView(buildBottomBar(), FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM,
-        ))
-        return frame
-    }
-
-    private fun buildTopControls(): View {
-        val row = LinearLayout(this).apply {
+        val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, dp(12))
         }
 
-        row.addView(pillButton("时钟") {
-            getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
-                .putString(KEY_MODE, MODE_CLOCK)
-                .apply()
-            refreshSelectedStyle()
+        val spacer = View(this)
+        topBar.addView(spacer, LinearLayout.LayoutParams(0, dp(44), 1f))
+
+        val permissionButton = smallButton("权限") {
+            openOverlayPermission()
+        }
+        val settingsButton = smallButton("5s") {
+            refreshIntervalMs = if (refreshIntervalMs == 5000L) 10000L else 5000L
+            (it as Button).text = if (refreshIntervalMs == 5000L) "5s" else "10s"
+            startRefreshLoop()
+        }
+        topBar.addView(permissionButton)
+        topBar.addView(settingsButton, marginLeft = dp(8))
+        root.addView(topBar)
+
+        val statusCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = roundedBg(Color.WHITE, 20f, view = this)
+            elevation = 2f * density
+        }
+
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        statusSource = TextView(this).apply {
+            text = selectedPlatform.name
+            textSize = 15f
+            setTextColor(Color.rgb(31, 41, 55))
+            bold()
+        }
+        statusLatency = TextView(this).apply {
+            text = "0 ms"
+            textSize = 14f
+            gravity = Gravity.END
+            setTextColor(Color.rgb(34, 197, 94))
+            bold()
+        }
+        statusRow.addView(statusSource, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        statusRow.addView(statusLatency, LinearLayout.LayoutParams(dp(90), ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        statusTime = TextView(this).apply {
+            text = formatTime(System.currentTimeMillis())
+            textSize = 34f
+            setTextColor(Color.rgb(17, 24, 39))
+            includeFontPadding = false
+            bold()
+        }
+        statusCard.addView(statusRow)
+        statusCard.addView(statusTime, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8)
         })
-        row.addView(space(dp(8), 1))
-        row.addView(pillButton("秒表") {
-            activityStopwatchStartMs = SystemClock.elapsedRealtime()
-            getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
-                .putString(KEY_MODE, MODE_STOPWATCH)
-                .apply()
-            refreshSelectedStyle()
+        root.addView(statusCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8)
         })
-        row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        row.addView(pillButton("权限") { openOverlayPermission() })
-        return row
+
+        grid = GridLayout(this).apply {
+            columnCount = 2
+        }
+        Platforms.items.forEach { platform ->
+            val card = platformCard(platform)
+            cardViews[platform.name] = card
+            grid.addView(card)
+        }
+
+        val scroll = ScrollView(this).apply {
+            addView(grid)
+        }
+        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
+            topMargin = dp(14)
+        })
+
+        val controlRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        controlRow.addView(smallButton("-50ms") {
+            offsetMs -= 50L
+            updateStatus()
+        }, LinearLayout.LayoutParams(0, dp(46), 1f))
+        controlRow.addView(smallButton("重置") {
+            offsetMs = 0L
+            updateStatus()
+        }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(8) })
+        controlRow.addView(smallButton("+50ms") {
+            offsetMs += 50L
+            updateStatus()
+        }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(8) })
+        root.addView(controlRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply {
+            topMargin = dp(10)
+        })
+
+        val modeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        modeRow.addView(smallButton("时钟") {
+            stopwatchMode = false
+        }, LinearLayout.LayoutParams(0, dp(46), 1f))
+        modeRow.addView(smallButton("秒表") {
+            stopwatchMode = true
+        }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(8) })
+        root.addView(modeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply {
+            topMargin = dp(8)
+        })
+
+        val startButton = Button(this).apply {
+            text = "开启悬浮"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            background = roundedBg(Color.rgb(34, 197, 94), 18f, view = this)
+            setOnClickListener { startFloating() }
+        }
+        root.addView(startButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply {
+            topMargin = dp(10)
+        })
+
+        setContentView(root)
+        updateSelectedCards()
     }
 
-    private fun buildStatusCard(): View {
+    private fun platformCard(platform: Platform): LinearLayout {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(13), dp(16), dp(13))
-            background = roundBg(Color.rgb(20, 20, 22), dp(18))
+            setPadding(dp(14), dp(14), dp(14), dp(12))
+            background = roundedBg(Color.WHITE, 18f, view = this)
+            elevation = 1f * resources.displayMetrics.density
+            setOnClickListener {
+                selectedPlatform = platform
+                latestLatencyMs = if (platform.url == null) 0L else -1L
+                serverOffsetMs = 0L
+                updateSelectedCards()
+                updateStatus()
+                startRefreshLoop()
+            }
         }
 
-        statusText = TextView(this).apply {
-            text = "系统  00:00:00.0  0 ms"
-            textSize = 18f
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val icon = TextView(this).apply {
+            text = platform.shortName
+            textSize = 16f
+            gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-            includeFontPadding = false
+            bold()
+            background = roundedBg(platform.color, 999f, view = this)
         }
-        offsetText = TextView(this).apply {
-            text = "偏移 0 ms · 每 5 秒刷新"
-            textSize = 12f
-            setTextColor(Color.rgb(190, 190, 190))
-            setPadding(0, dp(8), 0, 0)
-            includeFontPadding = false
+        val name = TextView(this).apply {
+            text = platform.name
+            textSize = 15f
+            setTextColor(Color.rgb(31, 41, 55))
+            bold()
         }
-        card.addView(statusText)
-        card.addView(offsetText)
-        card.layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-        ).apply { bottomMargin = dp(12) }
+        top.addView(icon, LinearLayout.LayoutParams(dp(34), dp(34)))
+        top.addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            leftMargin = dp(10)
+        })
+
+        val time = TextView(this).apply {
+            text = formatTime(System.currentTimeMillis())
+            textSize = 18f
+            setTextColor(Color.rgb(17, 24, 39))
+            includeFontPadding = false
+            bold()
+        }
+        val latency = TextView(this).apply {
+            text = if (platform.url == null) "0 ms" else "-- ms"
+            textSize = 13f
+            setTextColor(Color.rgb(107, 114, 128))
+        }
+        cardTimeViews[platform.name] = time
+        cardLatencyViews[platform.name] = latency
+
+        card.addView(top)
+        card.addView(time, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(14)
+        })
+        card.addView(latency, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(4)
+        })
+
+        val lp = GridLayout.LayoutParams().apply {
+            width = (resources.displayMetrics.widthPixels - dp(16 * 2) - dp(10)) / 2
+            height = ViewGroup.LayoutParams.WRAP_CONTENT
+            setMargins(0, 0, dp(10), dp(10))
+        }
+        card.layoutParams = lp
         return card
     }
 
-    private fun buildSourceGrid(): View {
-        val grid = GridLayout(this).apply {
-            columnCount = 3
-            useDefaultMargins = false
-        }
-        TimeSources.all.forEach { source ->
-            val holder = buildSourceCard(source)
-            val lp = GridLayout.LayoutParams().apply {
-                width = 0
-                height = dp(118)
-                columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                setMargins(dp(5), dp(5), dp(5), dp(5))
-            }
-            grid.addView(holder.root, lp)
-            cardHolders[source.id] = holder
-            latencyMap[source.id] = if (source.url == null) 0L else -1L
-        }
-        return grid
-    }
-
-    private fun buildSourceCard(source: TimeSource): CardHolder {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = roundBg(Color.WHITE, dp(16))
-            isClickable = true
-            isFocusable = true
-            setOnClickListener {
-                getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
-                    .putString(KEY_SOURCE_ID, source.id)
-                    .apply()
-                refreshSelectedStyle()
-            }
-        }
-
-        val icon = TextView(this).apply {
-            text = source.shortName
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            typeface = Typeface.DEFAULT_BOLD
-            background = ovalBg(source.color)
-            includeFontPadding = false
-        }
-        root.addView(icon, LinearLayout.LayoutParams(dp(36), dp(36)))
-
-        val name = TextView(this).apply {
-            text = source.name
-            textSize = 15f
-            setTextColor(Color.rgb(28, 28, 30))
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setPadding(0, dp(8), 0, 0)
-            includeFontPadding = false
-        }
-        root.addView(name)
-
-        val time = TextView(this).apply {
-            text = "--:--:--.-"
-            textSize = 12f
-            setTextColor(Color.rgb(45, 45, 45))
-            gravity = Gravity.CENTER
-            typeface = Typeface.MONOSPACE
-            setPadding(0, dp(6), 0, 0)
-            includeFontPadding = false
-        }
-        root.addView(time)
-
-        val latency = TextView(this).apply {
-            text = if (source.url == null) "0 ms" else "-- ms"
-            textSize = 12f
-            setTextColor(latencyColor(if (source.url == null) 0L else -1L))
-            gravity = Gravity.CENTER
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(5), 0, 0)
-            includeFontPadding = false
-        }
-        root.addView(latency)
-
-        return CardHolder(source, root, time, latency)
-    }
-
-    private fun buildTips(): View {
-        val text = TextView(this).apply {
-            text = "使用须知\n1. 平台时间来自 HTTP Date 响应头，部分网站可能无时间头或拒绝请求\n2. 延迟是 HTTP 请求耗时，不等同于 ICMP Ping\n3. 悬浮窗需要手动授予“显示在其他应用上层”权限\n4. 自用测试版：默认 5 秒刷新一次，避免过高频率请求"
-            textSize = 12f
-            setTextColor(Color.rgb(118, 118, 118))
-            setLineSpacing(dp(2).toFloat(), 1.0f)
-            setPadding(dp(2), dp(18), dp(2), dp(12))
-        }
-        return text
-    }
-
-    private fun buildBottomBar(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(10), dp(14), dp(14))
-            background = roundBg(Color.WHITE, dp(24), Color.rgb(235, 235, 235), dp(1))
-            elevation = dp(10).toFloat()
-        }
-
-        val offsetRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        offsetRow.addView(miniButton("-50ms") { changeOffset(-50L) })
-        offsetRow.addView(miniButton("重置") { setOffset(0L) })
-        offsetRow.addView(miniButton("+50ms") { changeOffset(50L) })
-        offsetRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        offsetRow.addView(miniButton("5s") { setRefresh(5000L) })
-        offsetRow.addView(miniButton("10s") { setRefresh(10000L) })
-        box.addView(offsetRow)
-
-        startButton = Button(this).apply {
-            text = "开启悬浮"
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            typeface = Typeface.DEFAULT_BOLD
-            background = roundBg(Color.rgb(69, 210, 107), dp(16))
-            setOnClickListener { toggleFloating() }
-        }
-        box.addView(startButton, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(56),
-        ).apply { topMargin = dp(10) })
-        return box
-    }
-
-    private fun startTickerLoop() {
+    private fun startClockLoop() {
         scope.launch {
             while (isActive) {
-                updateTimes()
+                updateStatus()
+                updateCardTimes()
                 delay(100L)
             }
         }
     }
 
-    private fun startLatencyLoop() {
-        scope.launch {
+    private fun startRefreshLoop() {
+        refreshJob?.cancel()
+        refreshJob = scope.launch {
             while (isActive) {
-                refreshAllLatencies()
-                val refresh = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-                    .getLong(KEY_REFRESH_MS, DEFAULT_REFRESH_MS)
-                    .coerceIn(3000L, 60000L)
-                delay(refresh)
+                refreshSelectedLatency()
+                delay(refreshIntervalMs)
             }
         }
     }
 
-    private suspend fun refreshAllLatencies() = coroutineScope {
-        TimeSources.all.filter { it.url != null }.forEach { source ->
-            launch {
-                val result = tester.measure(source)
-                withContext(Dispatchers.Main.immediate) {
-                    latencyMap[source.id] = result.latencyMs
-                    if (result.serverEpochMs != null) {
-                        baseMap[source.id] = result.serverEpochMs to SystemClock.elapsedRealtime()
-                    }
-                    updateSingleCard(source)
-                    updateStatusText()
-                }
-            }
-        }
-    }
-
-    private fun updateTimes() {
-        TimeSources.all.forEach { updateSingleCard(it) }
-        updateStatusText()
-    }
-
-    private fun updateSingleCard(source: TimeSource) {
-        val holder = cardHolders[source.id] ?: return
-        val prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-        val offsetMs = prefs.getLong(KEY_OFFSET_MS, 0L)
-        val base = baseMap[source.id]
-        val now = currentDisplayEpochMs(source, base?.first, base?.second ?: 0L, offsetMs)
-        val latency = latencyMap[source.id] ?: if (source.url == null) 0L else -1L
-        holder.time.text = formatClockTime(now)
-        holder.latency.text = latencyText(latency)
-        holder.latency.setTextColor(latencyColor(latency))
-    }
-
-    private fun updateStatusText() {
-        val prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-        val source = TimeSources.byId(prefs.getString(KEY_SOURCE_ID, "system"))
-        val mode = prefs.getString(KEY_MODE, MODE_CLOCK) ?: MODE_CLOCK
-        val offsetMs = prefs.getLong(KEY_OFFSET_MS, 0L)
-        val refreshMs = prefs.getLong(KEY_REFRESH_MS, DEFAULT_REFRESH_MS)
-
-        if (mode == MODE_STOPWATCH) {
-            val elapsed = SystemClock.elapsedRealtime() - activityStopwatchStartMs
-            statusText.text = "秒表  ${formatStopwatch(elapsed)}"
-            offsetText.text = "点击开启悬浮后，悬浮窗显示独立秒表"
+    private suspend fun refreshSelectedLatency() {
+        val url = selectedPlatform.url
+        if (url == null) {
+            latestLatencyMs = 0L
+            serverOffsetMs = 0L
+            updateStatus()
             return
         }
-
-        val base = baseMap[source.id]
-        val now = currentDisplayEpochMs(source, base?.first, base?.second ?: 0L, offsetMs)
-        val latency = latencyMap[source.id] ?: if (source.url == null) 0L else -1L
-        statusText.text = "${source.name}  ${formatClockTime(now)}  ${latencyText(latency)}"
-        val sign = when {
-            offsetMs > 0 -> "+"
-            else -> ""
+        val result = LatencyTester.test(url)
+        latestLatencyMs = result.latencyMs
+        serverOffsetMs = result.serverOffsetMs ?: 0L
+        cardLatencyViews[selectedPlatform.name]?.apply {
+            text = latencyText(latestLatencyMs)
+            setTextColor(latencyColor(latestLatencyMs))
         }
-        offsetText.text = "偏移 $sign$offsetMs ms · 每 ${refreshMs / 1000} 秒刷新"
+        updateStatus()
     }
 
-    private fun refreshSelectedStyle() {
-        val prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-        val selected = prefs.getString(KEY_SOURCE_ID, "system") ?: "system"
-        cardHolders.forEach { (id, holder) ->
-            val isSelected = id == selected
-            holder.root.background = if (isSelected) {
-                roundBg(Color.rgb(239, 255, 244), dp(16), Color.rgb(69, 210, 107), dp(2))
+    private fun updateStatus() {
+        val now = System.currentTimeMillis() + offsetMs + serverOffsetMs
+        statusSource.text = selectedPlatform.name
+        statusTime.text = if (stopwatchMode) "秒表模式" else formatTime(now)
+        statusLatency.text = latencyText(latestLatencyMs)
+        statusLatency.setTextColor(latencyColor(latestLatencyMs))
+    }
+
+    private fun updateCardTimes() {
+        val now = System.currentTimeMillis()
+        cardTimeViews.forEach { (_, view) ->
+            view.text = formatTime(now)
+        }
+    }
+
+    private fun updateSelectedCards() {
+        cardViews.forEach { (name, view) ->
+            val selected = name == selectedPlatform.name
+            view.background = if (selected) {
+                roundedBg(0xFFEFFDF4.toInt(), 18f, 2, Color.rgb(34, 197, 94), view)
             } else {
-                roundBg(Color.WHITE, dp(16))
+                roundedBg(Color.WHITE, 18f, view = view)
             }
         }
-        updateStatusText()
     }
 
-    private fun toggleFloating() {
+    private fun startFloating() {
         if (!Settings.canDrawOverlays(this)) {
             openOverlayPermission()
             return
         }
-        floatingStarted = !floatingStarted
-        val intent = Intent(this, FloatingWatchService::class.java)
-        if (floatingStarted) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
-            startButton.text = "关闭悬浮"
-            startButton.background = roundBg(Color.rgb(34, 34, 36), dp(16))
-        } else {
-            stopService(intent)
-            startButton.text = "开启悬浮"
-            startButton.background = roundBg(Color.rgb(69, 210, 107), dp(16))
+        val intent = Intent(this, FloatingService::class.java).apply {
+            putExtra(FloatingService.EXTRA_PLATFORM_NAME, selectedPlatform.name)
+            putExtra(FloatingService.EXTRA_PLATFORM_URL, selectedPlatform.url)
+            putExtra(FloatingService.EXTRA_OFFSET_MS, offsetMs)
+            putExtra(FloatingService.EXTRA_REFRESH_INTERVAL_MS, refreshIntervalMs)
+            putExtra(FloatingService.EXTRA_STOPWATCH_MODE, stopwatchMode)
         }
-    }
-
-    private fun changeOffset(delta: Long) {
-        val prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-        val next = (prefs.getLong(KEY_OFFSET_MS, 0L) + delta).coerceIn(-3000L, 3000L)
-        setOffset(next)
-    }
-
-    private fun setOffset(value: Long) {
-        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit().putLong(KEY_OFFSET_MS, value).apply()
-        updateStatusText()
-    }
-
-    private fun setRefresh(value: Long) {
-        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit().putLong(KEY_REFRESH_MS, value).apply()
-        updateStatusText()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
     }
 
     private fun openOverlayPermission() {
         val intent = Intent(
             Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:$packageName"),
+            Uri.parse("package:$packageName")
         )
         startActivity(intent)
     }
 
-    private fun requestNotificationPermissionIfNeed() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
-            }
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
         }
     }
 
-    private fun pillButton(text: String, onClick: () -> Unit): Button {
+    private fun smallButton(textValue: String, action: (View) -> Unit): Button {
         return Button(this).apply {
-            this.text = text
-            textSize = 13f
-            setTextColor(Color.rgb(35, 35, 35))
-            background = roundBg(Color.WHITE, dp(18), Color.rgb(235, 235, 235), dp(1))
+            text = textValue
+            textSize = 14f
+            setTextColor(Color.rgb(31, 41, 55))
+            background = roundedBg(Color.WHITE, 14f, view = this)
+            setOnClickListener(action)
             minHeight = 0
-            minimumHeight = 0
             minWidth = 0
-            minimumWidth = 0
-            setPadding(dp(16), 0, dp(16), 0)
-            setOnClickListener { onClick() }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(38),
-            )
+            includeFontPadding = false
         }
     }
 
-    private fun miniButton(text: String, onClick: () -> Unit): Button {
-        return Button(this).apply {
-            this.text = text
-            textSize = 12f
-            setTextColor(Color.rgb(55, 55, 55))
-            background = roundBg(Color.rgb(245, 246, 248), dp(12))
-            minHeight = 0
-            minimumHeight = 0
-            minWidth = 0
-            minimumWidth = 0
-            setPadding(dp(8), 0, dp(8), 0)
-            setOnClickListener { onClick() }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(34),
-            ).apply { rightMargin = dp(6) }
+    private fun LinearLayout.addView(view: View, marginLeft: Int) {
+        addView(view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)).apply {
+            leftMargin = marginLeft
+        })
+    }
+
+    private fun latencyText(value: Long): String {
+        return when {
+            value < 0L -> "失败"
+            else -> "$value ms"
         }
     }
 
-    private fun space(width: Int, height: Int): View {
-        return View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(width, height)
+    private fun latencyColor(value: Long): Int {
+        return when {
+            value < 0L -> Color.rgb(156, 163, 175)
+            value <= 80L -> Color.rgb(34, 197, 94)
+            value <= 150L -> Color.rgb(245, 158, 11)
+            else -> Color.rgb(239, 68, 68)
         }
     }
 
-    data class CardHolder(
-        val source: TimeSource,
-        val root: LinearLayout,
-        val time: TextView,
-        val latency: TextView,
-    )
+    private fun formatTime(millis: Long): String {
+        return SimpleDateFormat("HH:mm:ss.S", Locale.CHINA).format(Date(millis))
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }

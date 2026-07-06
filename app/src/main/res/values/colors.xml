@@ -1,4 +1,3 @@
 <resources>
-    <color name="floatwatch_green">#45D26B</color>
-    <color name="floatwatch_bg">#F7F8FA</color>
+    <color name="icon_bg">#111827</color>
 </resources>
