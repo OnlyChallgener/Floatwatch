@@ -5,10 +5,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -45,6 +50,8 @@ class FloatingService : Service() {
         const val ACTION_STOP = "com.floatwatch.app.action.STOP"
         const val ACTION_TOGGLE_COMPACT = "com.floatwatch.app.action.TOGGLE_COMPACT"
         const val ACTION_PAUSE_REFRESH = "com.floatwatch.app.action.PAUSE_REFRESH"
+        const val ACTION_CONFIG_CHANGED = "com.floatwatch.app.action.CONFIG_CHANGED"
+        const val ACTION_LATENCY_CHANGED = "com.floatwatch.app.action.LATENCY_CHANGED"
         const val EXTRA_RELOAD_CONFIG = "com.floatwatch.app.extra.RELOAD_CONFIG"
 
         private const val CHANNEL_ID = "floatwatch_running"
@@ -55,6 +62,9 @@ class FloatingService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var clockJob: Job? = null
     private var refreshJob: Job? = null
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var appReceiver: BroadcastReceiver? = null
 
     private var floatingView: View? = null
     private var floatingParams: WindowManager.LayoutParams? = null
@@ -77,11 +87,15 @@ class FloatingService : Service() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createChannel()
+        registerAppReceiver()
+        registerNetworkCallback()
     }
 
     override fun onDestroy() {
         removeFloatingView()
         removeMenu()
+        unregisterAppReceiver()
+        unregisterNetworkCallback()
         scope.cancel()
         super.onDestroy()
     }
@@ -112,6 +126,8 @@ class FloatingService : Service() {
                 paused = !paused
                 updateHint()
             }
+            ACTION_CONFIG_CHANGED -> reloadRunningConfig()
+            ACTION_LATENCY_CHANGED -> syncLatencyFromStore()
             else -> showFloatingView()
         }
         return START_STICKY
@@ -124,7 +140,13 @@ class FloatingService : Service() {
 
         if (reloadConfig || cfg == null) {
             cfg = ConfigStore.load(this)
-            latestLatencyMs = if (cfg?.platformUrl == null) 0L else -1L
+            latestLatencyMs = currentPlatform()?.let { platform ->
+                if (platform.url == null) {
+                    PlatformLatencyStore.setFixed(platform.name, 0L).smoothedLatencyMs
+                } else {
+                    PlatformLatencyStore.snapshot(platform.name).smoothedLatencyMs
+                }
+            } ?: -1L
             serverOffsetMs = 0L
             if (cfg?.mode == ConfigStore.MODE_COUNTDOWN) {
                 val current = cfg
@@ -435,15 +457,17 @@ private fun buildCompactView(): LinearLayout {
     }
 
     private suspend fun refreshLatency() {
-        val url = cfg?.platformUrl
-        if (url == null) {
-            latestLatencyMs = 0L
+        val platform = currentPlatform()
+        if (platform?.url == null) {
+            latestLatencyMs = platform?.let { PlatformLatencyStore.setFixed(it.name, 0L).smoothedLatencyMs } ?: 0L
             serverOffsetMs = 0L
             updateLatencyUi()
             return
         }
-        val result = LatencyTester.stableTest(url)
-        latestLatencyMs = LatencyStabilizer.update(cfg?.platformName ?: "default", result.latencyMs)
+        val requestId = PlatformLatencyStore.beginRequest(platform.name)
+        val result = LatencyTester.stableTest(platform, repeats = 3)
+        val snapshot = PlatformLatencyStore.applyResult(platform.name, requestId, result.latencyMs)
+        latestLatencyMs = snapshot?.smoothedLatencyMs ?: PlatformLatencyStore.snapshot(platform.name).smoothedLatencyMs
         serverOffsetMs = 0L
         updateLatencyUi()
     }
@@ -501,6 +525,102 @@ private fun buildCompactView(): LinearLayout {
             }
         }
         return TimeKeeper.now() + durationMs
+    }
+
+    private fun currentPlatform(): Platform? {
+        val name = cfg?.platformName ?: return null
+        return Platforms.items.firstOrNull { it.name == name }
+    }
+
+    private fun registerNetworkCallback() {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return
+        connectivityManager = manager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                handleNetworkChanged()
+            }
+
+            override fun onLost(network: Network) {
+                handleNetworkChanged()
+            }
+        }
+        networkCallback = callback
+        try {
+            manager.registerDefaultNetworkCallback(callback)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        val callback = networkCallback ?: return
+        try {
+            connectivityManager?.unregisterNetworkCallback(callback)
+        } catch (_: Exception) {
+        }
+        networkCallback = null
+    }
+
+    private fun handleNetworkChanged() {
+        scope.launch {
+            PlatformLatencyStore.resetAll()
+            latestLatencyMs = currentPlatform()?.let { platform ->
+                if (platform.url == null) PlatformLatencyStore.setFixed(platform.name, 0L).smoothedLatencyMs else -1L
+            } ?: -1L
+            updateLatencyUi()
+            TimeKeeper.syncBest()
+            if (!paused) refreshLatency()
+        }
+    }
+
+    private fun registerAppReceiver() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    ACTION_CONFIG_CHANGED -> reloadRunningConfig()
+                    ACTION_LATENCY_CHANGED -> syncLatencyFromStore()
+                }
+            }
+        }
+        appReceiver = receiver
+        val filter = IntentFilter().apply {
+            addAction(ACTION_CONFIG_CHANGED)
+            addAction(ACTION_LATENCY_CHANGED)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(receiver, filter)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun unregisterAppReceiver() {
+        val receiver = appReceiver ?: return
+        try {
+            unregisterReceiver(receiver)
+        } catch (_: Exception) {
+        }
+        appReceiver = null
+    }
+
+    private fun reloadRunningConfig() {
+        cfg = ConfigStore.load(this)
+        syncLatencyFromStore()
+        if (floatingView != null) showFloatingView(reloadConfig = false)
+    }
+
+    private fun syncLatencyFromStore() {
+        val platform = currentPlatform()
+        latestLatencyMs = if (platform?.url == null) {
+            platform?.let { PlatformLatencyStore.setFixed(it.name, 0L).smoothedLatencyMs } ?: 0L
+        } else {
+            platform?.let { PlatformLatencyStore.snapshot(it.name).smoothedLatencyMs } ?: -1L
+        }
+        serverOffsetMs = 0L
+        updateLatencyUi()
     }
 
     private fun displayPlatformName(name: String?): String {

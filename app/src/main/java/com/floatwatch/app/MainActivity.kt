@@ -5,6 +5,8 @@ import android.app.Activity
 import android.app.Dialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
@@ -34,6 +36,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -43,6 +47,10 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var refreshJob: Job? = null
+    private val refreshSemaphore = Semaphore(3)
+    private var refreshGeneration: Long = 0L
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     private var selectedPlatform: Platform = Platforms.items.first()
     private var mode: String = ConfigStore.MODE_CLOCK
@@ -69,13 +77,13 @@ class MainActivity : Activity() {
     private val cardLatencyViews = mutableMapOf<String, TextView>()
     private val cardTimeViews = mutableMapOf<String, TextView>()
     private val platformLatencyMs = mutableMapOf<String, Long>()
-    private val platformRequestIds = mutableMapOf<String, Int>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         loadState()
         requestNotificationPermissionIfNeeded()
         buildUi()
+        registerNetworkCallback()
         startClockLoop()
         scope.launch {
             TimeKeeper.syncBest()
@@ -86,6 +94,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterNetworkCallback()
         scope.cancel()
     }
 
@@ -230,6 +239,7 @@ class MainActivity : Activity() {
                 latestLatencyMs = platformLatencyMs[platform.name] ?: if (platform.url == null) 0L else -1L
                 serverOffsetMs = 0L
                 ConfigStore.savePlatform(this@MainActivity, platform)
+                notifyFloatingConfigChanged()
                 updateSelectedCards()
                 updateStatus()
                 refreshPlatform(platform, manual = true)
@@ -673,22 +683,32 @@ private fun addCompactOffsetSection(root: LinearLayout) {
     }
 
     private fun refreshAllPlatformsOnce(manual: Boolean = false) {
-        Platforms.items.forEach { refreshPlatform(it, manual = manual) }
+        refreshGeneration += 1L
+        val generation = refreshGeneration
+        Platforms.items.forEach { refreshPlatform(it, manual = manual, generation = generation) }
     }
 
-    private fun refreshPlatform(platform: Platform, manual: Boolean = false) {
-        val url = platform.url
-        if (url == null) {
-            applyPlatformLatency(platform, 0L)
+    private fun refreshPlatform(
+        platform: Platform,
+        manual: Boolean = false,
+        generation: Long = refreshGeneration + 1L
+    ) {
+        if (platform.url == null) {
+            val snapshot = PlatformLatencyStore.setFixed(platform.name, 0L)
+            applyPlatformLatency(platform, snapshot.smoothedLatencyMs)
             return
         }
-        val nextId = (platformRequestIds[platform.name] ?: 0) + 1
-        platformRequestIds[platform.name] = nextId
+        if (generation > refreshGeneration) refreshGeneration = generation
+        val requestId = PlatformLatencyStore.beginRequest(platform.name)
         scope.launch {
-            val result = LatencyTester.stableTest(url, repeats = if (manual) 5 else 3)
-            if (platformRequestIds[platform.name] != nextId) return@launch
-            val stable = LatencyStabilizer.update(platform.name, result.latencyMs)
-            applyPlatformLatency(platform, stable)
+            refreshSemaphore.withPermit {
+                if (generation != refreshGeneration) return@withPermit
+                val result = LatencyTester.stableTest(platform, repeats = if (manual) 5 else 3)
+                if (generation != refreshGeneration) return@withPermit
+                val snapshot = PlatformLatencyStore.applyResult(platform.name, requestId, result.latencyMs)
+                    ?: return@withPermit
+                applyPlatformLatency(platform, snapshot.smoothedLatencyMs)
+            }
         }
     }
 
@@ -700,6 +720,7 @@ private fun addCompactOffsetSection(root: LinearLayout) {
             latestLatencyMs = value
             serverOffsetMs = 0L
             updateStatus()
+            notifyFloatingLatencyChanged()
         }
     }
 
@@ -810,6 +831,58 @@ private fun addCompactOffsetSection(root: LinearLayout) {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1024)
         }
+    }
+
+    private fun registerNetworkCallback() {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return
+        connectivityManager = manager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                handleNetworkChanged()
+            }
+
+            override fun onLost(network: Network) {
+                handleNetworkChanged()
+            }
+        }
+        networkCallback = callback
+        try {
+            manager.registerDefaultNetworkCallback(callback)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        val callback = networkCallback ?: return
+        try {
+            connectivityManager?.unregisterNetworkCallback(callback)
+        } catch (_: Exception) {
+        }
+        networkCallback = null
+    }
+
+    private fun handleNetworkChanged() {
+        scope.launch {
+            PlatformLatencyStore.resetAll()
+            Platforms.items.forEach { platform ->
+                val value = if (platform.url == null) 0L else -1L
+                platformLatencyMs[platform.name] = value
+                cardLatencyViews[platform.name]?.text = latencyText(value)
+                cardLatencyViews[platform.name]?.setTextColor(latencyColor(value))
+            }
+            latestLatencyMs = platformLatencyMs[selectedPlatform.name] ?: -1L
+            updateStatus()
+            TimeKeeper.syncBest()
+            refreshAllPlatformsOnce(manual = true)
+        }
+    }
+
+    private fun notifyFloatingConfigChanged() {
+        sendBroadcast(Intent(FloatingService.ACTION_CONFIG_CHANGED).setPackage(packageName))
+    }
+
+    private fun notifyFloatingLatencyChanged() {
+        sendBroadcast(Intent(FloatingService.ACTION_LATENCY_CHANGED).setPackage(packageName))
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()

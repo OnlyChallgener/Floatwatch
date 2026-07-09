@@ -1,98 +1,92 @@
 package com.floatwatch.app
 
+import android.os.SystemClock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.text.SimpleDateFormat
-import java.util.Locale
-import java.util.TimeZone
-import java.util.concurrent.TimeUnit
+import java.net.InetSocketAddress
+import java.net.Socket
 import kotlin.math.max
+import kotlin.math.roundToLong
 
-/**
- * HTTP latency tester.
- *
- * Kept as a class with a companion object on purpose:
- * - LatencyTester().test(url) works
- * - LatencyTester.test(url) also works
- * This avoids CI failures when older files still instantiate LatencyTester.
- */
 class LatencyTester {
     data class Result(
         val latencyMs: Long,
         val serverOffsetMs: Long?
     )
 
-    suspend fun test(url: String): Result = testInternal(url)
+    suspend fun test(url: String): Result = stableTest(url, repeats = 3)
 
     companion object {
-        private val client: OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(2500, TimeUnit.MILLISECONDS)
-            .readTimeout(2500, TimeUnit.MILLISECONDS)
-            .writeTimeout(2500, TimeUnit.MILLISECONDS)
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .build()
+        private const val DEFAULT_PORT = 443
+        private const val CONNECT_TIMEOUT_MS = 1000
 
-        suspend fun test(url: String): Result = testInternal(url)
+        suspend fun test(url: String): Result = stableTest(url, repeats = 3)
 
-        /**
-         * Stable HTTP RTT sampler.
-         *
-         * It still measures the selected platform with HTTP HEAD, but behaves closer to a
-         * traditional ping display: short burst sampling, drop obvious spikes, then return a
-         * stable low/median value instead of a single random request.
-         */
         suspend fun stableTest(url: String, repeats: Int = 5): Result {
-            val samples = mutableListOf<Result>()
-            repeat(repeats.coerceAtLeast(3)) { index ->
-                val r = testInternal(url)
-                if (r.latencyMs in 1..2500) samples.add(r)
-                if (index != repeats - 1) delay(70L)
-            }
-            if (samples.isEmpty()) return Result(-1, null)
-
-            val sorted = samples.sortedBy { it.latencyMs }
-            val picked = when {
-                sorted.size >= 5 -> sorted[1] // ignore one unrealistically low sample and high spikes
-                sorted.size >= 3 -> sorted[sorted.size / 2]
-                else -> sorted.first()
-            }
-            return picked
+            val host = hostFromUrl(url) ?: return Result(-1L, null)
+            return stableHosts(listOf(HostTarget(host, DEFAULT_PORT)), repeats)
         }
 
-        private suspend fun testInternal(url: String): Result = withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url(url)
-                .head()
-                .header("User-Agent", "Floatwatch/1.0")
-                .header("Cache-Control", "no-cache")
-                .build()
+        suspend fun stableTest(platform: Platform, repeats: Int = 5): Result {
+            if (platform.url == null) return Result(0L, null)
+            val targets = platform.latencyHosts.ifEmpty {
+                listOfNotNull(hostFromUrl(platform.url)?.let { HostTarget(it, DEFAULT_PORT) })
+            }
+            if (targets.isEmpty()) return Result(-1L, null)
+            return stableHosts(targets, repeats)
+        }
 
-            val start = System.currentTimeMillis()
+        private suspend fun stableHosts(targets: List<HostTarget>, repeats: Int): Result {
+            val perHostSamples = repeats.coerceIn(3, 5)
+            val hostValues = mutableListOf<Long>()
+            for (target in targets) {
+                val samples = mutableListOf<Long>()
+                repeat(perHostSamples) { index ->
+                    val sample = tcpConnect(target)
+                    if (sample in 1..CONNECT_TIMEOUT_MS.toLong()) samples.add(sample)
+                    if (index != perHostSamples - 1) delay(45L)
+                }
+                pickStableLow(samples)?.let { hostValues.add(it) }
+            }
+            val picked = pickStableLow(hostValues) ?: return Result(-1L, null)
+            return Result(picked, null)
+        }
+
+        private suspend fun tcpConnect(target: HostTarget): Long = withContext(Dispatchers.IO) {
             try {
-                client.newCall(request).execute().use { response ->
-                    val end = System.currentTimeMillis()
-                    val latency = end - start
-                    val dateHeader = response.header("Date")
-                    val offset = parseHttpDate(dateHeader)?.let { serverTime ->
-                        serverTime - end
-                    }
-                    Result(latency, offset)
+                val address = InetSocketAddress(target.host, target.port)
+                Socket().use { socket ->
+                    socket.tcpNoDelay = true
+                    val start = SystemClock.elapsedRealtime()
+                    socket.connect(address, CONNECT_TIMEOUT_MS)
+                    SystemClock.elapsedRealtime() - start
                 }
             } catch (_: Exception) {
-                Result(-1, null)
+                -1L
             }
         }
 
-        private fun parseHttpDate(value: String?): Long? {
-            if (value.isNullOrBlank()) return null
+        private fun pickStableLow(samples: List<Long>): Long? {
+            if (samples.isEmpty()) return null
+            val sorted = samples.filter { it > 0L }.sorted()
+            if (sorted.isEmpty()) return null
+            if (sorted.size <= 2) return sorted.first()
+
+            val median = sorted[sorted.size / 2]
+            val filtered = sorted.filter { it <= max(median * 2L, median + 160L) }
+            val stable = if (filtered.isEmpty()) sorted else filtered
+            return when {
+                stable.size >= 4 -> stable[1]
+                stable.size >= 3 -> stable[1]
+                else -> stable.first()
+            }
+        }
+
+        private fun hostFromUrl(url: String?): String? {
+            if (url.isNullOrBlank()) return null
             return try {
-                val formatter = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
-                formatter.timeZone = TimeZone.getTimeZone("GMT")
-                formatter.parse(value)?.time
+                java.net.URI(url).host
             } catch (_: Exception) {
                 null
             }
@@ -100,40 +94,102 @@ class LatencyTester {
     }
 }
 
+data class HostTarget(
+    val host: String,
+    val port: Int = 443
+)
 
-/**
- * Process-wide latency smoother used by Activity and FloatingService.
- * It prevents one-off HTTP/TLS/CDN spikes from jumping the visible number from 10ms to 600ms.
- */
-object LatencyStabilizer {
-    private val lastValues = mutableMapOf<String, Long>()
+data class PlatformLatencySnapshot(
+    val latestLatencyMs: Long,
+    val smoothedLatencyMs: Long,
+    val lastSuccessAt: Long,
+    val failCount: Int,
+    val requestId: Long
+)
+
+object PlatformLatencyStore {
+    private const val ALPHA = 0.40
+    private val states = mutableMapOf<String, MutablePlatformLatencyState>()
 
     @Synchronized
-    fun reset(key: String) {
-        lastValues.remove(key)
+    fun beginRequest(key: String): Long {
+        val state = stateFor(key)
+        state.requestId += 1L
+        return state.requestId
     }
 
     @Synchronized
-    fun update(key: String, rawMs: Long): Long {
-        if (rawMs < 0) return rawMs
-        val previous = lastValues[key]
-        if (previous == null || previous < 0) {
-            lastValues[key] = rawMs
-            return rawMs
+    fun requestId(key: String): Long = stateFor(key).requestId
+
+    @Synchronized
+    fun snapshot(key: String): PlatformLatencySnapshot {
+        return stateFor(key).snapshot()
+    }
+
+    @Synchronized
+    fun applyResult(key: String, requestId: Long, rawMs: Long): PlatformLatencySnapshot? {
+        val state = stateFor(key)
+        if (state.requestId != requestId) return null
+
+        if (rawMs < 0L) {
+            state.failCount += 1
+            if (state.smoothedLatencyMs < 0L) {
+                state.latestLatencyMs = -1L
+                state.smoothedLatencyMs = -1L
+            }
+            return state.snapshot()
         }
 
-        // Drop one-off large spikes that are usually DNS/TLS/CDN reconnects, not real RTT.
-        if (rawMs > max(260L, previous * 4) && rawMs - previous > 180L) {
-            return previous
+        state.latestLatencyMs = rawMs
+        state.failCount = 0
+        state.lastSuccessAt = SystemClock.elapsedRealtime()
+        val previous = state.smoothedLatencyMs
+        state.smoothedLatencyMs = when {
+            previous < 0L -> rawMs
+            rawMs > max(previous * 3L, previous + 220L) -> previous
+            else -> (previous * (1.0 - ALPHA) + rawMs * ALPHA).roundToLong().coerceAtLeast(1L)
         }
+        return state.snapshot()
+    }
 
-        val alpha = when {
-            rawMs > previous + 120L -> 0.18
-            rawMs > previous -> 0.30
-            else -> 0.55
-        }
-        val smoothed = (previous * (1.0 - alpha) + rawMs * alpha).toLong().coerceAtLeast(1L)
-        lastValues[key] = smoothed
-        return smoothed
+    @Synchronized
+    fun setFixed(key: String, value: Long): PlatformLatencySnapshot {
+        val state = stateFor(key)
+        state.requestId += 1L
+        state.latestLatencyMs = value
+        state.smoothedLatencyMs = value
+        state.lastSuccessAt = if (value >= 0L) SystemClock.elapsedRealtime() else 0L
+        state.failCount = 0
+        return state.snapshot()
+    }
+
+    @Synchronized
+    fun reset(key: String) {
+        states.remove(key)
+    }
+
+    @Synchronized
+    fun resetAll() {
+        states.clear()
+    }
+
+    private fun stateFor(key: String): MutablePlatformLatencyState {
+        return states.getOrPut(key) { MutablePlatformLatencyState() }
+    }
+
+    private class MutablePlatformLatencyState {
+        var latestLatencyMs: Long = -1L
+        var smoothedLatencyMs: Long = -1L
+        var lastSuccessAt: Long = 0L
+        var failCount: Int = 0
+        var requestId: Long = 0L
+
+        fun snapshot(): PlatformLatencySnapshot = PlatformLatencySnapshot(
+            latestLatencyMs = latestLatencyMs,
+            smoothedLatencyMs = smoothedLatencyMs,
+            lastSuccessAt = lastSuccessAt,
+            failCount = failCount,
+            requestId = requestId
+        )
     }
 }
